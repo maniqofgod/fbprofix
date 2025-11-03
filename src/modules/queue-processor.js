@@ -1,4 +1,4 @@
-const Database = require('better-sqlite3');
+const sqlite3 = require('sqlite3').verbose();
 const cron = require('node-cron');
 const path = require('path');
 
@@ -8,7 +8,7 @@ const path = require('path');
  */
 class QueueProcessor {
     constructor(options = {}, dbPath = null) {
-        this.dbPath = dbPath || path.join(__dirname, '..', '..', 'database.sqlite');
+        this.dbPath = dbPath || path.join(__dirname, '..', '..', 'reelsync.db');
         this.db = null;
         this.isProcessing = false;
         this.processingInterval = null;
@@ -32,10 +32,10 @@ class QueueProcessor {
      */
     initializeDatabase() {
         try {
-            this.db = new Database(this.dbPath);
+            this.db = new sqlite3.Database(this.dbPath);
 
-                // Ensure queue table exists with all columns
-            this.db.exec(`
+            // Ensure queue table exists with all columns
+            this.db.run(`
                 CREATE TABLE IF NOT EXISTS queue (
                     id TEXT PRIMARY KEY,
                     user_id TEXT,                    -- User who owns this queue item
@@ -68,9 +68,13 @@ class QueueProcessor {
                     key TEXT PRIMARY KEY,
                     value TEXT
                 );
-            `);
-
-            console.log('📊 QueueProcessor database initialized');
+            `, (err) => {
+                if (err) {
+                    console.error('❌ Error creating tables:', err);
+                } else {
+                    console.log('📊 QueueProcessor database initialized');
+                }
+            });
         } catch (error) {
             console.error('❌ Error initializing QueueProcessor database:', error);
         }
@@ -196,7 +200,7 @@ class QueueProcessor {
     async updateQueueItem(itemId, updates) {
         try {
             // Check if item exists
-            const existing = this.getQueueItem(itemId);
+            const existing = await this.getQueueItem(itemId);
             if (!existing) {
                 return {
                     success: false,
@@ -283,175 +287,205 @@ class QueueProcessor {
     /**
      * Ambil semua item di antrian
      */
-    getQueue() {
-        try {
-            const stmt = this.db.prepare('SELECT * FROM queue ORDER BY created_at DESC');
-            const rows = stmt.all();
-            const now = new Date();
-            const settings = this.getSettings();
-            const cooldownMap = new Map();
+    async getQueue() {
+        return new Promise((resolve) => {
+            try {
+                this.db.all('SELECT * FROM queue ORDER BY created_at DESC', async (err, rows) => {
+                    if (err) {
+                        console.error('Error getting queue:', err);
+                        resolve([]);
+                        return;
+                    }
 
-            // Calculate last completion time for each account+page combination
-            rows.forEach(row => {
-                const key = `${row.account_name}-${row.page_id}`;
-                const completionTime = row.completion_time || row.actual_upload_time || row.created_at;
-                const lastUpload = new Date(completionTime);
+                    const now = new Date();
+                    const settings = await this.getSettings();
+                    const cooldownMap = new Map();
 
-                if (!cooldownMap.has(key) || lastUpload > cooldownMap.get(key)) {
-                    cooldownMap.set(key, lastUpload);
-                }
-            });
+                    // Calculate last completion time for each account+page combination
+                    rows.forEach(row => {
+                        const key = `${row.account_name}-${row.page_id}`;
+                        const completionTime = row.completion_time || row.actual_upload_time || row.created_at;
+                        const lastUpload = new Date(completionTime);
 
-            // Convert database column names to camelCase for compatibility
-            return rows.map(row => {
-                const key = `${row.account_name}-${row.page_id}`;
-                const lastUpload = cooldownMap.get(key);
-                const timeSinceLastUpload = now - lastUpload;
-                const cooldownMs = settings.uploadDelay || 30000; // 30 seconds default
+                        if (!cooldownMap.has(key) || lastUpload > cooldownMap.get(key)) {
+                            cooldownMap.set(key, lastUpload);
+                        }
+                    });
 
-                let cooldownRemaining = 0;
-                if (timeSinceLastUpload < cooldownMs && (row.status === 'pending' || row.status === 'scheduled')) {
-                    cooldownRemaining = Math.ceil((cooldownMs - timeSinceLastUpload) / 1000); // seconds
-                }
+                    // Convert database column names to camelCase for compatibility
+                    const processedRows = rows.map(row => {
+                        const key = `${row.account_name}-${row.page_id}`;
+                        const lastUpload = cooldownMap.get(key);
+                        const timeSinceLastUpload = now - lastUpload;
+                        const cooldownMs = settings.uploadDelay || 30000; // 30 seconds default
 
-                return {
-                    id: row.id,
-                    userId: row.user_id, // Include userId here as well
-                    account: row.account_name,
-                    page: row.page_id,
-                    pageName: row.page_name,
-                    type: row.type,
-                    file: row.file_path,
-                    fileName: row.file_name,
-                    caption: row.caption,
-                    status: row.status,
-                    schedule: row.scheduled_time,
-                    actualUploadTime: row.actual_upload_time,
-                    completionTime: row.completion_time,
-                    processingTime: row.processing_time,
-                    attempts: row.retry_count,
-                    nextRetry: row.next_retry, // Add nextRetry field conversion
-                    errorMessage: row.error_message,
-                    processingLogs: row.processing_logs,
-                    createdAt: row.created_at,
-                    updatedAt: row.updated_at,
-                    cooldownRemaining: cooldownRemaining,
-                    cooldownMinutes: Math.ceil(cooldownRemaining / 60),
-                    canUpload: cooldownRemaining === 0
-                };
-            });
-        } catch (error) {
-            console.error('Error getting queue:', error);
-            return [];
-        }
+                        let cooldownRemaining = 0;
+                        if (timeSinceLastUpload < cooldownMs && (row.status === 'pending' || row.status === 'scheduled')) {
+                            cooldownRemaining = Math.ceil((cooldownMs - timeSinceLastUpload) / 1000); // seconds
+                        }
+
+                        return {
+                            id: row.id,
+                            userId: row.user_id, // Include userId here as well
+                            account: row.account_name,
+                            page: row.page_id,
+                            pageName: row.page_name,
+                            type: row.type,
+                            file: row.file_path,
+                            fileName: row.file_name,
+                            caption: row.caption,
+                            status: row.status,
+                            schedule: row.scheduled_time,
+                            actualUploadTime: row.actual_upload_time,
+                            completionTime: row.completion_time,
+                            processingTime: row.processing_time,
+                            attempts: row.retry_count,
+                            nextRetry: row.next_retry, // Add nextRetry field conversion
+                            errorMessage: row.error_message,
+                            processingLogs: row.processing_logs,
+                            createdAt: row.created_at,
+                            updatedAt: row.updated_at,
+                            cooldownRemaining: cooldownRemaining,
+                            cooldownMinutes: Math.ceil(cooldownRemaining / 60),
+                            canUpload: cooldownRemaining === 0
+                        };
+                    });
+
+                    resolve(processedRows);
+                });
+            } catch (error) {
+                console.error('Error getting queue:', error);
+                resolve([]);
+            }
+        });
     }
 
     /**
      * Ambil semua item di antrian untuk user tertentu
      */
-    getQueueForUser(userId) {
-        try {
-            const stmt = this.db.prepare('SELECT * FROM queue WHERE user_id = ? ORDER BY created_at DESC');
-            const rows = stmt.all(userId);
-            const now = new Date();
-            const settings = this.getSettings();
-            const cooldownMap = new Map();
+    async getQueueForUser(userId) {
+        return new Promise((resolve) => {
+            try {
+                this.db.all('SELECT * FROM queue WHERE user_id = ? ORDER BY created_at DESC', [userId], async (err, rows) => {
+                    if (err) {
+                        console.error('Error getting queue for user:', err);
+                        resolve([]);
+                        return;
+                    }
 
-            // Calculate last completion time for each account+page combination
-            rows.forEach(row => {
-                const key = `${row.account_name}-${row.page_id}`;
-                const completionTime = row.completion_time || row.actual_upload_time || row.created_at;
-                const lastUpload = new Date(completionTime);
+                    const now = new Date();
+                    const settings = await this.getSettings();
+                    const cooldownMap = new Map();
 
-                if (!cooldownMap.has(key) || lastUpload > cooldownMap.get(key)) {
-                    cooldownMap.set(key, lastUpload);
-                }
-            });
+                    // Calculate last completion time for each account+page combination
+                    rows.forEach(row => {
+                        const key = `${row.account_name}-${row.page_id}`;
+                        const completionTime = row.completion_time || row.actual_upload_time || row.created_at;
+                        const lastUpload = new Date(completionTime);
 
-            // Convert database column names to camelCase for compatibility
-            return rows.map(row => {
-                const key = `${row.account_name}-${row.page_id}`;
-                const lastUpload = cooldownMap.get(key);
-                const timeSinceLastUpload = now - lastUpload;
-                const cooldownMs = settings.uploadDelay || 30000; // 30 seconds default
+                        if (!cooldownMap.has(key) || lastUpload > cooldownMap.get(key)) {
+                            cooldownMap.set(key, lastUpload);
+                        }
+                    });
 
-                let cooldownRemaining = 0;
-                if (timeSinceLastUpload < cooldownMs && (row.status === 'pending' || row.status === 'scheduled')) {
-                    cooldownRemaining = Math.ceil((cooldownMs - timeSinceLastUpload) / 1000); // seconds
-                }
+                    // Convert database column names to camelCase for compatibility
+                    const processedRows = rows.map(row => {
+                        const key = `${row.account_name}-${row.page_id}`;
+                        const lastUpload = cooldownMap.get(key);
+                        const timeSinceLastUpload = now - lastUpload;
+                        const cooldownMs = settings.uploadDelay || 30000; // 30 seconds default
 
-                return {
-                    id: row.id,
-                    userId: row.user_id, // Include userId here as well
-                    account: row.account_name,
-                    page: row.page_id,
-                    pageName: row.page_name,
-                    type: row.type,
-                    file: row.file_path,
-                    fileName: row.file_name,
-                    caption: row.caption,
-                    status: row.status,
-                    schedule: row.scheduled_time,
-                    actualUploadTime: row.actual_upload_time,
-                    completionTime: row.completion_time,
-                    processingTime: row.processing_time,
-                    attempts: row.retry_count,
-                    nextRetry: row.next_retry, // Add nextRetry field conversion
-                    errorMessage: row.error_message,
-                    processingLogs: row.processing_logs,
-                    createdAt: row.created_at,
-                    updatedAt: row.updated_at,
-                    cooldownRemaining: cooldownRemaining,
-                    cooldownMinutes: Math.ceil(cooldownRemaining / 60),
-                    canUpload: cooldownRemaining === 0
-                };
-            });
-        } catch (error) {
-            console.error('Error getting queue for user:', error);
-            return [];
-        }
+                        let cooldownRemaining = 0;
+                        if (timeSinceLastUpload < cooldownMs && (row.status === 'pending' || row.status === 'scheduled')) {
+                            cooldownRemaining = Math.ceil((cooldownMs - timeSinceLastUpload) / 1000); // seconds
+                        }
+
+                        return {
+                            id: row.id,
+                            userId: row.user_id, // Include userId here as well
+                            account: row.account_name,
+                            page: row.page_id,
+                            pageName: row.page_name,
+                            type: row.type,
+                            file: row.file_path,
+                            fileName: row.file_name,
+                            caption: row.caption,
+                            status: row.status,
+                            schedule: row.scheduled_time,
+                            actualUploadTime: row.actual_upload_time,
+                            completionTime: row.completion_time,
+                            processingTime: row.processing_time,
+                            attempts: row.retry_count,
+                            nextRetry: row.next_retry, // Add nextRetry field conversion
+                            errorMessage: row.error_message,
+                            processingLogs: row.processing_logs,
+                            createdAt: row.created_at,
+                            updatedAt: row.updated_at,
+                            cooldownRemaining: cooldownRemaining,
+                            cooldownMinutes: Math.ceil(cooldownRemaining / 60),
+                            canUpload: cooldownRemaining === 0
+                        };
+                    });
+
+                    resolve(processedRows);
+                });
+            } catch (error) {
+                console.error('Error getting queue for user:', error);
+                resolve([]);
+            }
+        });
     }
 
     /**
      * Ambil item berdasarkan ID
      */
     getQueueItem(itemId) {
-        try {
-            const stmt = this.db.prepare('SELECT * FROM queue WHERE id = ?');
-            const row = stmt.get(itemId);
+        return new Promise((resolve) => {
+            try {
+                this.db.get('SELECT * FROM queue WHERE id = ?', [itemId], (err, row) => {
+                    if (err) {
+                        console.error('Error getting queue item:', err);
+                        resolve(null);
+                        return;
+                    }
 
-            if (!row) return null;
+                    if (!row) {
+                        resolve(null);
+                        return;
+                    }
 
-            // Convert database column names to camelCase for compatibility
-            return {
-                id: row.id,
-                userId: row.user_id, // Make sure userId is included
-                account: row.account_name,
-                accountType: row.account_type,
-                cookie: row.cookie,
-                pagesData: row.pages_data,
-                page: row.page_id,
-                pageName: row.page_name,
-                type: row.type,
-                file: row.file_path,
-                fileName: row.file_name,
-                caption: row.caption,
-                status: row.status,
-                schedule: row.scheduled_time,
-                actualUploadTime: row.actual_upload_time,
-                completionTime: row.completion_time,
-                processingTime: row.processing_time,
-                attempts: row.retry_count,
-                nextRetry: row.next_retry, // Add nextRetry field conversion
-                errorMessage: row.error_message,
-                processingLogs: row.processing_logs,
-                createdAt: row.created_at,
-                updatedAt: row.updated_at
-            };
-        } catch (error) {
-            console.error('Error getting queue item:', error);
-            return null;
-        }
+                    // Convert database column names to camelCase for compatibility
+                    resolve({
+                        id: row.id,
+                        userId: row.user_id, // Make sure userId is included
+                        account: row.account_name,
+                        accountType: row.account_type,
+                        cookie: row.cookie,
+                        pagesData: row.pages_data,
+                        page: row.page_id,
+                        pageName: row.page_name,
+                        type: row.type,
+                        file: row.file_path,
+                        fileName: row.file_name,
+                        caption: row.caption,
+                        status: row.status,
+                        schedule: row.scheduled_time,
+                        actualUploadTime: row.actual_upload_time,
+                        completionTime: row.completion_time,
+                        processingTime: row.processing_time,
+                        attempts: row.retry_count,
+                        nextRetry: row.next_retry, // Add nextRetry field conversion
+                        errorMessage: row.error_message,
+                        processingLogs: row.processing_logs,
+                        createdAt: row.created_at,
+                        updatedAt: row.updated_at
+                    });
+                });
+            } catch (error) {
+                console.error('Error getting queue item:', error);
+                resolve(null);
+            }
+        });
     }
 
     /**
@@ -467,7 +501,7 @@ class QueueProcessor {
             this.isProcessing = true;
             console.log('🚀 Starting immediate queue processing...');
 
-            const queue = userId ? this.getQueueForUser(userId) : this.getQueue();
+            const queue = userId ? await this.getQueueForUser(userId) : await this.getQueue();
             console.log(`📊 Total items in queue: ${queue.length}`);
 
             const pendingItems = queue.filter(item =>
@@ -488,7 +522,7 @@ class QueueProcessor {
                 await this.processUpload(item);
 
                 // Delay antar upload sesuai pengaturan
-                const settings = this.getSettings();
+                const settings = await this.getSettings();
                 console.log(`⏰ Waiting ${settings.uploadDelay}ms before next upload...`);
                 await this.delay(settings.uploadDelay);
             }
@@ -506,7 +540,7 @@ class QueueProcessor {
      */
     async processScheduledUploads() {
         try {
-            const queue = this.getQueue();
+            const queue = await this.getQueue();
             const scheduledItems = queue.filter(item =>
                 item.status === 'scheduled' &&
                 item.schedule &&
@@ -565,7 +599,7 @@ class QueueProcessor {
             } else {
                 // Try to get account from database first
                 console.log(`🔍 Queue item missing cookie, trying database lookup for user ${queueItem.userId}, account ${queueItem.account}`);
-                account = this.getAccountFromDatabase(queueItem.userId, queueItem.account);
+                account = await this.getAccountFromDatabase(queueItem.userId, queueItem.account);
 
                 if (account && account.valid && account.cookie) {
                     console.log(`✅ Found account "${queueItem.account}" in database, recreating queue data`);
@@ -694,9 +728,9 @@ class QueueProcessor {
             await this.trackUploadFailure(queueItem, error.message, processingTime);
 
             // Update attempts
-            const currentItem = this.getQueueItem(queueItem.id);
+            const currentItem = await this.getQueueItem(queueItem.id);
             const attempts = (currentItem.attempts || 0) + 1;
-            const settings = this.getSettings();
+            const settings = await this.getSettings();
             const maxRetries = settings.maxRetries || 3;
 
             if (attempts < maxRetries) {
@@ -928,67 +962,108 @@ class QueueProcessor {
      * Ambil statistik antrian
      */
     getQueueStats() {
-        try {
-            const now = new Date();
+        return new Promise((resolve) => {
+            try {
+                const now = new Date();
 
-            const statsStmt = this.db.prepare(`
-                SELECT
-                    COUNT(*) as total,
-                    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
-                    SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing,
-                    SUM(CASE WHEN status = 'retry' THEN 1 ELSE 0 END) as retry,
-                    SUM(CASE WHEN status = 'scheduled' AND scheduled_time > ? THEN 1 ELSE 0 END) as scheduled,
-                    SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
-                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
-                FROM queue
-            `);
+                this.db.get(`
+                    SELECT
+                        COUNT(*) as total,
+                        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+                        SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing,
+                        SUM(CASE WHEN status = 'retry' THEN 1 ELSE 0 END) as retry,
+                        SUM(CASE WHEN status = 'scheduled' AND scheduled_time > ? THEN 1 ELSE 0 END) as scheduled,
+                        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+                        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
+                    FROM queue
+                `, [now.toISOString()], (err, stats) => {
+                    if (err) {
+                        console.error('Error getting queue stats:', err);
+                        resolve({
+                            total: 0,
+                            pending: 0,
+                            processing: 0,
+                            scheduled: 0,
+                            completed: 0,
+                            failed: 0,
+                            retry: 0
+                        });
+                        return;
+                    }
 
-            const stats = statsStmt.get(now.toISOString());
-            return stats;
-        } catch (error) {
-            console.error('Error getting queue stats:', error);
-            return {
-                total: 0,
-                pending: 0,
-                processing: 0,
-                scheduled: 0,
-                completed: 0,
-                failed: 0,
-                retry: 0
-            };
-        }
+                    resolve(stats || {
+                        total: 0,
+                        pending: 0,
+                        processing: 0,
+                        scheduled: 0,
+                        completed: 0,
+                        failed: 0,
+                        retry: 0
+                    });
+                });
+            } catch (error) {
+                console.error('Error getting queue stats:', error);
+                resolve({
+                    total: 0,
+                    pending: 0,
+                    processing: 0,
+                    scheduled: 0,
+                    completed: 0,
+                    failed: 0,
+                    retry: 0
+                });
+            }
+        });
     }
 
     /**
      * Ambil pengaturan aplikasi
      */
     getSettings() {
-        try {
-            const stmt = this.db.prepare('SELECT key, value FROM settings');
-            const rows = stmt.all();
+        return new Promise((resolve) => {
+            try {
+                this.db.all('SELECT key, value FROM settings', (err, rows) => {
+                    if (err) {
+                        console.error('Error getting settings:', err);
+                        resolve({
+                            uploadDelay: 30000,
+                            maxRetries: 3,
+                            autoStartQueue: false,
+                            showNotifications: true,
+                            showBrowser: false
+                        });
+                        return;
+                    }
 
-            const settings = {};
-            rows.forEach(row => {
-                settings[row.key] = JSON.parse(row.value);
-            });
+                    const settings = {};
+                    rows.forEach(row => {
+                        try {
+                            settings[row.key] = JSON.parse(row.value);
+                        } catch (parseError) {
+                            console.error(`Error parsing setting ${row.key}:`, parseError);
+                            settings[row.key] = row.value; // Fallback to raw value
+                        }
+                    });
 
-            return {
-                uploadDelay: settings.uploadDelay || 30000,
-                maxRetries: settings.maxRetries || 3,
-                autoStartQueue: settings.autoStartQueue || false,
-                showNotifications: settings.showNotifications !== undefined ? settings.showNotifications : true,
-                showBrowser: settings.showBrowser || false
-            };
-        } catch (error) {
-            console.error('Error getting settings:', error);
-            return {
-                uploadDelay: 30000,
-                maxRetries: 3,
-                autoStartQueue: false,
-                showNotifications: true,
-                showBrowser: false
-            };
-        }
+                    resolve({
+                        uploadDelay: settings.uploadDelay || 30000,
+                        maxRetries: settings.maxRetries || 3,
+                        autoStartQueue: settings.autoStartQueue || false,
+                        showNotifications: settings.showNotifications !== undefined ? settings.showNotifications : true,
+                        showBrowser: settings.showBrowser || false
+                    });
+                });
+            } catch (error) {
+                console.error('Error getting settings:', error);
+                resolve({
+                    uploadDelay: 30000,
+                    maxRetries: 3,
+                    autoStartQueue: false,
+                    showNotifications: true,
+                    showBrowser: false
+                });
+            }
+        });
     }
 
     /**
@@ -1078,9 +1153,9 @@ class QueueProcessor {
     /**
      * Export queue data
      */
-    exportQueue() {
+    async exportQueue() {
         try {
-            const queue = this.getQueue();
+            const queue = await this.getQueue();
             return {
                 success: true,
                 data: queue,
@@ -1336,7 +1411,7 @@ class QueueProcessor {
      */
     async addProcessingLog(itemId, message, type = 'info') {
         try {
-            const existing = this.getQueueItem(itemId);
+            const existing = await this.getQueueItem(itemId);
             if (!existing) return;
 
             const currentLogs = existing.processingLogs || '';
@@ -1358,47 +1433,61 @@ class QueueProcessor {
      * Get account from database facebook_accounts table
      */
     getAccountFromDatabase(userId, accountName) {
-        try {
-            console.log(`🔍 Looking for account "${accountName}" for user ${userId} in database`);
+        return new Promise((resolve) => {
+            try {
+                console.log(`🔍 Looking for account "${accountName}" for user ${userId} in database`);
 
-            // Ensure facebook_accounts table exists (for compatibility with server.js)
-            this.db.exec(`
-                CREATE TABLE IF NOT EXISTS facebook_accounts (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    type TEXT DEFAULT 'personal',
-                    cookie TEXT,
-                    pages_data TEXT DEFAULT '[]',
-                    is_valid INTEGER DEFAULT 0,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(user_id, name)
-                )
-            `);
+                // Ensure facebook_accounts table exists (for compatibility with server.js)
+                this.db.run(`
+                    CREATE TABLE IF NOT EXISTS facebook_accounts (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        type TEXT DEFAULT 'personal',
+                        cookie TEXT,
+                        pages_data TEXT DEFAULT '[]',
+                        is_valid INTEGER DEFAULT 0,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(user_id, name)
+                    )
+                `, (err) => {
+                    if (err) {
+                        console.error('Error creating facebook_accounts table:', err);
+                        resolve(null);
+                        return;
+                    }
 
-            const stmt = this.db.prepare('SELECT * FROM facebook_accounts WHERE user_id = ? AND name = ?');
-            const account = stmt.get(userId, accountName);
+                    // Now query for the account
+                    this.db.get('SELECT * FROM facebook_accounts WHERE user_id = ? AND name = ?', [userId, accountName], (err, account) => {
+                        if (err) {
+                            console.error('Error querying account from database:', err);
+                            resolve(null);
+                            return;
+                        }
 
-            if (account) {
-                console.log(`✅ Found account "${accountName}" in database`);
-                return {
-                    id: account.id,
-                    name: account.name,
-                    type: account.type,
-                    cookie: account.cookie,
-                    pages: account.pages_data ? JSON.parse(account.pages_data) : [],
-                    valid: account.is_valid === 1,
-                    userId: account.user_id
-                };
+                        if (account) {
+                            console.log(`✅ Found account "${accountName}" in database`);
+                            resolve({
+                                id: account.id,
+                                name: account.name,
+                                type: account.type,
+                                cookie: account.cookie,
+                                pages: account.pages_data ? JSON.parse(account.pages_data) : [],
+                                valid: account.is_valid === 1,
+                                userId: account.user_id
+                            });
+                        } else {
+                            console.log(`❌ Account "${accountName}" not found in database for user ${userId}`);
+                            resolve(null);
+                        }
+                    });
+                });
+            } catch (error) {
+                console.error('Error getting account from database:', error);
+                resolve(null);
             }
-
-            console.log(`❌ Account "${accountName}" not found in database for user ${userId}`);
-            return null;
-        } catch (error) {
-            console.error('Error getting account from database:', error);
-            return null;
-        }
+        });
     }
 }
 

@@ -39,7 +39,84 @@ class GeminiRateLimiter {
     }
 }
 
+// API Key Rate Limiter - tracks rate limits per API key
+class GeminiApiRateLimiter {
+    constructor() {
+        this.rateLimitedKeys = new Map(); // Map<apiId, {until: timestamp, reason: string}>
+        this.cooldownPeriod = 30 * 60 * 1000; // 30 minutes in milliseconds
+    }
+
+    // Check if API key is currently rate limited
+    isRateLimited(apiId) {
+        const limitInfo = this.rateLimitedKeys.get(apiId);
+        if (!limitInfo) return false;
+
+        const now = Date.now();
+        if (now >= limitInfo.until) {
+            // Cooldown period has expired, remove from rate limited list
+            this.rateLimitedKeys.delete(apiId);
+            return false;
+        }
+
+        return true;
+    }
+
+    // Mark API key as rate limited
+    markRateLimited(apiId, reason = 'Rate limit exceeded') {
+        const until = Date.now() + this.cooldownPeriod;
+        this.rateLimitedKeys.set(apiId, {
+            until: until,
+            reason: reason,
+            markedAt: Date.now()
+        });
+        console.log(`🚫 API Key ${apiId} marked as rate limited until ${new Date(until).toISOString()} (${reason})`);
+    }
+
+    // Get remaining cooldown time for an API key
+    getRemainingCooldown(apiId) {
+        const limitInfo = this.rateLimitedKeys.get(apiId);
+        if (!limitInfo) return 0;
+
+        const now = Date.now();
+        const remaining = Math.ceil((limitInfo.until - now) / 1000);
+        return Math.max(0, remaining);
+    }
+
+    // Get all currently rate limited API keys
+    getRateLimitedKeys() {
+        const now = Date.now();
+        const limited = [];
+
+        for (const [apiId, info] of this.rateLimitedKeys.entries()) {
+            if (now < info.until) {
+                limited.push({
+                    apiId,
+                    reason: info.reason,
+                    remainingSeconds: Math.ceil((info.until - now) / 1000),
+                    until: info.until
+                });
+            } else {
+                // Clean up expired entries
+                this.rateLimitedKeys.delete(apiId);
+            }
+        }
+
+        return limited;
+    }
+
+    // Clear expired rate limits
+    cleanup() {
+        const now = Date.now();
+        for (const [apiId, info] of this.rateLimitedKeys.entries()) {
+            if (now >= info.until) {
+                this.rateLimitedKeys.delete(apiId);
+            }
+        }
+    }
+}
+
 const rateLimiter = new GeminiRateLimiter();
+const apiRateLimiter = new GeminiApiRateLimiter();
 
 class GeminiService {
   static detectLanguage(fileName) {
@@ -70,10 +147,31 @@ class GeminiService {
                 throw new Error(errorMessage);
             }
 
+            // Check if a specific API key is requested
+            let apisToTry = allApis;
+            if (options.apiKeyId) {
+                const specificApi = allApis.find(api => api.id == options.apiKeyId);
+                if (specificApi) {
+                    apisToTry = [specificApi]; // Only try the specific API key
+                    console.log(`🎯 Using specific API key: ${specificApi.name} (${specificApi.id})`);
+                } else {
+                    errorMessage = `API key dengan ID ${options.apiKeyId} tidak ditemukan.`;
+                    throw new Error(errorMessage);
+                }
+            }
+
             // Try each API key until one works
             let lastError;
-            for (const currentApi of allApis) {
+            for (const currentApi of apisToTry) {
                 if (usedApiKeys.has(currentApi.id)) continue; // Skip already tried keys
+
+                // Check if this API key is currently rate limited
+                if (apiRateLimiter.isRateLimited(currentApi.id)) {
+                    const remainingCooldown = apiRateLimiter.getRemainingCooldown(currentApi.id);
+                    console.log(`⏰ Skipping rate-limited API key: ${currentApi.name} (${currentApi.id}) - ${remainingCooldown}s remaining`);
+                    usedApiKeys.add(currentApi.id);
+                    continue;
+                }
 
                 try {
                     console.log(`🔄 Trying API key: ${currentApi.name} (${currentApi.id})`);
@@ -275,6 +373,19 @@ JSON格式：
                             console.warn(`Gemini API attempt ${attempt} failed:`, error.message);
                             console.warn('Full error:', error);
 
+                            // Check if this is a rate limit error
+                            const isRateLimitError = error.message?.toLowerCase().includes('rate limit') ||
+                                                    error.message?.toLowerCase().includes('quota exceeded') ||
+                                                    error.message?.toLowerCase().includes('resource exhausted') ||
+                                                    error.status === 429;
+
+                            if (isRateLimitError) {
+                                console.log(`🚫 Rate limit detected for API key ${currentApi.name} (${currentApi.id})`);
+                                apiRateLimiter.markRateLimited(currentApi.id, error.message || 'Rate limit exceeded');
+                                // Break out of retry loop for this API key
+                                break;
+                            }
+
                             if (attempt < 3) {
                                 const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000); // Exponential backoff max 5s
                                 await new Promise(resolve => setTimeout(resolve, delay));
@@ -339,6 +450,21 @@ JSON格式：
             console.error('Error validating Gemini API key:', error);
             return false;
         }
+    }
+
+    // Get currently rate limited API keys
+    getRateLimitedKeys() {
+        return apiRateLimiter.getRateLimitedKeys();
+    }
+
+    // Check if a specific API key is rate limited
+    isApiKeyRateLimited(apiId) {
+        return apiRateLimiter.isRateLimited(apiId);
+    }
+
+    // Get remaining cooldown time for an API key
+    getApiKeyCooldown(apiId) {
+        return apiRateLimiter.getRemainingCooldown(apiId);
     }
 }
 

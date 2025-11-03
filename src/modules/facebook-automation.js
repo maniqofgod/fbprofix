@@ -1619,6 +1619,56 @@ if (switchSuccess) {
                         await page.screenshot({ path: 'debug-post-after-kirim-click.png' , width: 1024, height: 768 });
                         console.log('📸 Screenshot: debug-post-after-kirim-click.png');
 
+                        // HANDLE "Permudah untuk menghubungi Anda" POPUP
+                        console.log('🔍 Checking for "Permudah untuk menghubungi Anda" popup...');
+                        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait for popup to appear
+
+                        const popupHandled = await page.evaluate(() => {
+                            const allText = document.body.textContent || '';
+
+                            // Check if popup with "Permudah untuk menghubungi Anda" is present
+                            if (allText.includes('Permudah untuk menghubungi Anda') ||
+                                allText.includes('Permudah untuk menghubungi') ||
+                                allText.includes('menghubungi Anda')) {
+
+                                console.log('📱 Found "Permudah untuk menghubungi Anda" popup');
+
+                                // Find and click "lain kali" (next time) button
+                                const allButtons = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"], span[role="button"]'));
+
+                                const lainKaliBtn = allButtons.find(btn => {
+                                    const text = btn.textContent?.trim() || '';
+                                    const ariaLabel = btn.getAttribute('aria-label') || '';
+                                    return text.includes('lain kali') ||
+                                           text.includes('Lain kali') ||
+                                           text.includes('LAIN KALI') ||
+                                           ariaLabel.includes('lain kali') ||
+                                           text.includes('nanti') ||
+                                           text.includes('Nanti');
+                                });
+
+                                if (lainKaliBtn) {
+                                    console.log('✅ Found "lain kali" button, clicking...');
+                                    lainKaliBtn.click();
+                                    return { handled: true, action: 'clicked_lain_kali' };
+                                } else {
+                                    console.log('⚠️ "lain kali" button not found');
+                                    return { handled: false, action: 'popup_found_no_button' };
+                                }
+                            }
+
+                            return { handled: false, action: 'no_popup' };
+                        });
+
+                        if (popupHandled.handled) {
+                            console.log(`🎯 Popup handled: ${popupHandled.action}`);
+                            await page.screenshot({ path: 'debug-post-after-popup-handling.png' , width: 1024, height: 768 });
+                            console.log('📸 Screenshot: debug-post-after-popup-handling.png');
+                            await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for popup to close
+                        } else {
+                            console.log('ℹ️ No "Permudah untuk menghubungi Anda" popup found');
+                        }
+
                         // GET SUCCESS MESSAGE LIKE REELS - CHECK SHORT TEXT FRAGMENTS
                         let successMessage = { found: false };
                         let attempts = 0;
@@ -1637,9 +1687,27 @@ if (switchSuccess) {
                                     'Post telah dibagikan'
                                 ];
 
+                                // CHECK FOR SUCCESS MESSAGES FIRST
                                 for (const text of successTexts) {
                                     if (allText.includes(text)) {
-                                        return { found: true, message: text };
+                                        return { found: true, message: text, type: 'success' };
+                                    }
+                                }
+
+                                // CHECK FOR LOADING/POSTING INDICATORS AS SUCCESS
+                                // If we see "memposting" or similar loading text, it means posting is in progress = SUCCESS
+                                const loadingTexts = [
+                                    'memposting',
+                                    'posting',
+                                    'sedang memposting',
+                                    'posting...',
+                                    'uploading',
+                                    'sedang mengupload'
+                                ];
+
+                                for (const loadingText of loadingTexts) {
+                                    if (allText.toLowerCase().includes(loadingText.toLowerCase())) {
+                                        return { found: true, message: `Loading: ${loadingText}`, type: 'loading' };
                                     }
                                 }
 
@@ -1649,6 +1717,9 @@ if (switchSuccess) {
                             if (!successMessage.found) {
                                 await new Promise(resolve => setTimeout(resolve, 2000));
                                 attempts++;
+                                console.log(`🔄 Waiting for success message... (attempt ${attempts}/${maxAttempts})`);
+                            } else {
+                                console.log(`🎉 SUCCESS DETECTED! Type: ${successMessage.type}, Message: "${successMessage.message}"`);
                             }
                         }
 
@@ -1664,8 +1735,7 @@ if (switchSuccess) {
 
                             return {
                                 success: true,
-                                url: uploadUrl,
-                                message: successMessage.message
+                                url: uploadUrl
                             };
                         } else {
                             console.log('⚠️ Success message not found within timeout');

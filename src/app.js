@@ -238,6 +238,17 @@ function initializeElements() {
         geminiSuccessRate: document.getElementById('gemini-success-rate'),
         usageStats: document.getElementById('usage-stats'),
 
+        // Bulk Gemini API elements
+        bulkAddGeminiApiBtn: document.getElementById('bulk-add-gemini-api-btn'),
+        bulkGeminiModal: document.getElementById('bulk-gemini-modal'),
+        bulkGeminiForm: document.getElementById('bulk-gemini-form'),
+        bulkGeminiApiKeys: document.getElementById('bulk-gemini-api-keys'),
+        bulkGeminiResults: document.getElementById('bulk-gemini-results'),
+        bulkGeminiResultsContent: document.getElementById('bulk-gemini-results-content'),
+        saveBulkGeminiBtn: document.getElementById('save-bulk-gemini-btn'),
+        cancelBulkGeminiBtn: document.getElementById('cancel-bulk-gemini-btn'),
+        bulkGeminiModalClose: document.getElementById('bulk-gemini-modal-close'),
+
     // Edit Queue Modal
     editQueueModal: document.getElementById('edit-queue-modal'),
     editQueueModalClose: document.getElementById('edit-queue-modal-close'),
@@ -336,10 +347,16 @@ function setupEventListeners() {
         // Gemini AI Caption
         elements.generateCaptionBtn.addEventListener('click', generateCaption);
         elements.addGeminiApiBtn.addEventListener('click', () => openGeminiModal());
+        elements.bulkAddGeminiApiBtn.addEventListener('click', () => openBulkGeminiModal());
         elements.saveGeminiBtn.addEventListener('click', saveGeminiApi);
         elements.cancelGeminiBtn.addEventListener('click', closeGeminiModal);
         elements.geminiModalClose.addEventListener('click', closeGeminiModal);
         elements.testGeminiApiBtn.addEventListener('click', testGeminiApi);
+
+        // Bulk Gemini API
+        elements.saveBulkGeminiBtn.addEventListener('click', saveBulkGeminiApis);
+        elements.cancelBulkGeminiBtn.addEventListener('click', closeBulkGeminiModal);
+        elements.bulkGeminiModalClose.addEventListener('click', closeBulkGeminiModal);
 
         // Edit Queue Modal
         elements.cancelEditQueueBtn.addEventListener('click', closeEditQueueModal);
@@ -584,98 +601,78 @@ async function saveAccount(e) {
     const existingAccount = appState.accounts.find(acc => acc.name === accountName);
     const isEdit = !!existingAccount;
 
-    if (isEdit && !accountCookie) {
-        // For edit operation, if no new cookie provided, just update account info
-        const accountData = {
-            name: accountName,
-            type: accountType,
-            cookie: '' // Will be handled by AccountManager
-        };
+    if (!isEdit && !accountCookie) {
+        // For new account, cookie is required
+        showToast('Cookie harus diisi untuk akun baru', 'error');
+        return;
+    }
 
-        try {
-            elements.saveAccountBtn.disabled = true;
-            elements.saveAccountBtn.innerHTML = '<div class="loading"></div> Updating...';
+    // Prepare account data
+    const accountData = {
+        name: accountName,
+        type: accountType,
+        cookie: accountCookie
+    };
 
-            const response = await fetch(`${API_BASE}/api/accounts/${accountName}`, {
+    try {
+        elements.saveAccountBtn.disabled = true;
+        elements.saveAccountBtn.innerHTML = '<div class="loading"></div> Memvalidasi...';
+
+        let response;
+        if (isEdit) {
+            // Edit existing account - use PUT endpoint
+            response = await fetch(`${API_BASE}/api/accounts/${accountName}`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({ cookie: accountData.cookie })
+                body: JSON.stringify({ cookie: accountCookie })
             });
-            const result = await response.json();
-
-            if (result.success) {
-                await loadAppData(); // Reload accounts
-                closeAccountModal();
-                showToast('Akun berhasil diupdate', 'success');
-            } else {
-                showToast(`Gagal mengupdate akun: ${result.error}`, 'error');
-            }
-        } catch (error) {
-            showToast(`Error: ${error.message}`, 'error');
-        } finally {
-            elements.saveAccountBtn.disabled = false;
-            elements.saveAccountBtn.innerHTML = '<i class="fas fa-save"></i> Update & Validasi';
-        }
-    } else if (!isEdit && !accountCookie) {
-        // For new account, cookie is required
-        showToast('Cookie harus diisi untuk akun baru', 'error');
-        return;
-    } else {
-        // New account or edit with new cookie
-        const accountData = {
-            name: accountName,
-            type: accountType,
-            cookie: accountCookie
-        };
-
-        try {
-            elements.saveAccountBtn.disabled = true;
-            elements.saveAccountBtn.innerHTML = '<div class="loading"></div> Memvalidasi...';
-
-            const response = await fetch(`${API_BASE}/api/accounts`, {
+        } else {
+            // Create new account - use POST endpoint
+            response = await fetch(`${API_BASE}/api/accounts`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify(accountData)
             });
-            const result = await response.json();
+        }
 
-            if (result.success) {
-                await loadAppData(); // Reload accounts
-                closeAccountModal();
+        const result = await response.json();
 
-                let message = '';
-                if (isEdit) {
-                    if (result.validation?.fromCache) {
-                        message = 'Akun berhasil diupdate (menggunakan validasi sebelumnya)';
-                    } else {
-                        message = 'Akun berhasil diupdate dan divalidasi';
-                    }
+        if (result.success) {
+            await loadAppData(); // Reload accounts
+            closeAccountModal();
+
+            let message = '';
+            if (isEdit) {
+                if (result.validation?.fromCache) {
+                    message = 'Akun berhasil diupdate (menggunakan validasi sebelumnya)';
                 } else {
-                    message = 'Akun berhasil disimpan dan divalidasi';
-                }
-
-                showToast(message, 'success');
-
-                if (result.pagesCount > 0) {
-                    showToast(`Ditemukan ${result.pagesCount} halaman Facebook`, 'info');
-                }
-
-                if (result.validation?.error) {
-                    showToast(`Catatan: ${result.validation.error}`, 'warning');
+                    message = 'Akun berhasil diupdate dan divalidasi';
                 }
             } else {
-                showToast(`Gagal menyimpan akun: ${result.error}`, 'error');
+                message = 'Akun berhasil disimpan dan divalidasi';
             }
-        } catch (error) {
-            showToast(`Error: ${error.message}`, 'error');
-        } finally {
-            elements.saveAccountBtn.disabled = false;
-            elements.saveAccountBtn.innerHTML = '<i class="fas fa-save"></i> Simpan & Validasi';
+
+            showToast(message, 'success');
+
+            if (result.pagesCount > 0) {
+                showToast(`Ditemukan ${result.pagesCount} halaman Facebook`, 'info');
+            }
+
+            if (result.validation?.error) {
+                showToast(`Catatan: ${result.validation.error}`, 'warning');
+            }
+        } else {
+            showToast(`Gagal menyimpan akun: ${result.error}`, 'error');
         }
+    } catch (error) {
+        showToast(`Error: ${error.message}`, 'error');
+    } finally {
+        elements.saveAccountBtn.disabled = false;
+        elements.saveAccountBtn.innerHTML = '<i class="fas fa-save"></i> Simpan & Validasi';
     }
 }
 
@@ -876,6 +873,14 @@ async function selectVideoFile() {
         fileInput.onchange = async (event) => {
             const file = event.target.files[0];
             if (file) {
+                // Validate file size before upload (check against server limits)
+                const maxFileSize = 500 * 1024 * 1024; // 500MB (server limit)
+                if (file.size > maxFileSize) {
+                    showToast(`File terlalu besar (${(file.size / (1024 * 1024)).toFixed(1)}MB). Maksimal 500MB.`, 'error');
+                    document.body.removeChild(fileInput);
+                    return;
+                }
+
                 showToast('Mengupload file...', 'info');
 
                 // Upload file to server immediately
@@ -887,7 +892,32 @@ async function selectVideoFile() {
                         method: 'POST',
                         body: formData
                     });
-                    const uploadResult = await uploadResponse.json();
+
+                    // Handle different response types
+                    let uploadResult;
+                    const contentType = uploadResponse.headers.get('content-type');
+
+                    if (uploadResponse.status === 413) {
+                        // Handle 413 Request Entity Too Large
+                        showToast('File terlalu besar untuk server. Coba file yang lebih kecil atau hubungi administrator.', 'error');
+                        document.body.removeChild(fileInput);
+                        return;
+                    }
+
+                    if (contentType && contentType.includes('application/json')) {
+                        uploadResult = await uploadResponse.json();
+                    } else {
+                        // Handle HTML error responses (from proxy)
+                        const textResponse = await uploadResponse.text();
+                        if (uploadResponse.ok) {
+                            uploadResult = { success: true, filePath: textResponse };
+                        } else {
+                            console.error('Server returned HTML error:', textResponse);
+                            showToast('Server mengembalikan error yang tidak valid. Coba lagi atau hubungi administrator.', 'error');
+                            document.body.removeChild(fileInput);
+                            return;
+                        }
+                    }
 
                     if (uploadResult.success) {
                         // Keep original filename for AI generation, store uploaded path separately
@@ -900,7 +930,12 @@ async function selectVideoFile() {
                         showToast(`Upload gagal: ${uploadResult.error}`, 'error');
                     }
                 } catch (uploadError) {
-                    showToast(`Error upload: ${uploadError.message}`, 'error');
+                    console.error('Upload error:', uploadError);
+                    if (uploadError.name === 'TypeError' && uploadError.message.includes('JSON')) {
+                        showToast('Server mengembalikan response yang tidak valid. Kemungkinan file terlalu besar.', 'error');
+                    } else {
+                        showToast(`Error upload: ${uploadError.message}`, 'error');
+                    }
                 }
             }
             // Remove the input element
@@ -967,6 +1002,24 @@ async function selectBulkVideoFiles() {
                 return;
             }
 
+            // Limit to maximum 20 files
+            if (files.length > 20) {
+                showToast(`Maksimal 20 file video yang dapat dipilih. Anda memilih ${files.length} file.`, 'error');
+                document.body.removeChild(fileInput);
+                return;
+            }
+
+            // Validate file sizes before upload
+            const maxFileSize = 500 * 1024 * 1024; // 500MB (server limit)
+            const oversizedFiles = files.filter(file => file.size > maxFileSize);
+
+            if (oversizedFiles.length > 0) {
+                const oversizedNames = oversizedFiles.map(f => f.name).join(', ');
+                showToast(`File terlalu besar: ${oversizedNames}. Maksimal 500MB per file.`, 'error');
+                document.body.removeChild(fileInput);
+                return;
+            }
+
             showToast(`Mengupload ${files.length} file...`, 'info');
 
             // Upload all files to server
@@ -983,7 +1036,31 @@ async function selectBulkVideoFiles() {
                         method: 'POST',
                         body: formData
                     });
-                    const uploadResult = await uploadResponse.json();
+
+                    // Handle different response types
+                    let uploadResult;
+                    const contentType = uploadResponse.headers.get('content-type');
+
+                    if (uploadResponse.status === 413) {
+                        // Handle 413 Request Entity Too Large
+                        console.error(`Upload failed for ${file.name}: 413 Request Entity Too Large`);
+                        errorCount++;
+                        continue;
+                    }
+
+                    if (contentType && contentType.includes('application/json')) {
+                        uploadResult = await uploadResponse.json();
+                    } else {
+                        // Handle HTML error responses (from proxy)
+                        const textResponse = await uploadResponse.text();
+                        if (uploadResponse.ok) {
+                            uploadResult = { success: true, filePath: textResponse };
+                        } else {
+                            console.error(`Server returned HTML error for ${file.name}:`, textResponse);
+                            errorCount++;
+                            continue;
+                        }
+                    }
 
                     if (uploadResult.success) {
                         uploadedFiles.push({
@@ -998,6 +1075,9 @@ async function selectBulkVideoFiles() {
                     }
                 } catch (uploadError) {
                     console.error(`Upload error for ${file.name}:`, uploadError);
+                    if (uploadError.name === 'TypeError' && uploadError.message.includes('JSON')) {
+                        console.error(`Server returned invalid response for ${file.name}, likely file too large`);
+                    }
                     errorCount++;
                 }
             }
@@ -1015,12 +1095,12 @@ async function selectBulkVideoFiles() {
                     showToast(`${successCount} file berhasil diupload`, 'success');
                 }
                 if (errorCount > 0) {
-                    showToast(`${errorCount} file gagal diupload`, 'warning');
+                    showToast(`${errorCount} file gagal diupload (kemungkinan terlalu besar)`, 'warning');
                 }
 
                 updateSendButtonState();
             } else {
-                showToast('Tidak ada file yang berhasil diupload', 'error');
+                showToast('Tidak ada file yang berhasil diupload. Pastikan file tidak terlalu besar.', 'error');
                 elements.bulkFiles.value = '';
             }
 
@@ -1074,7 +1154,7 @@ function removeBulkFile(index) {
     updateSendButtonState();
 }
 
-// Generate captions for bulk upload
+// Generate captions for bulk upload with round-robin API key assignment
 async function generateBulkCaptions() {
     const files = elements.bulkFilesList._uploadedFiles || [];
     const language = elements.bulkCaptionLanguage.value;
@@ -1095,32 +1175,103 @@ async function generateBulkCaptions() {
     let successCount = 0;
     let errorCount = 0;
 
-    for (let i = 0; i < files.length; i++) {
-        try {
-            const fileData = files[i];
-            const fileName = fileData.fileName.split('.').slice(0, -1).join('.'); // Remove extension
+    try {
+        // Get all available Gemini API keys for round-robin assignment
+        const apisResponse = await fetch(`${API_BASE}/api/gemini/apis`);
+        const apisResult = await apisResponse.json();
 
-            const result = await fetch(`${API_BASE}/api/gemini/generate-caption`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ fileName, language })
-            });
-            const response = await result.json();
+        let availableApis = [];
+        if (apisResult && Array.isArray(apisResult)) {
+            availableApis = apisResult.filter(api => api.isValid !== false);
+        }
 
-            if (response.success) {
-                files[i].caption = response.description || '';
-                successCount++;
-            } else {
-                console.error(`Caption generation failed for ${fileName}:`, response.error);
-                files[i].caption = `Video ${fileName}`; // Fallback caption
+        if (availableApis.length === 0) {
+            showToast('Tidak ada API key Gemini yang valid tersedia', 'error');
+            // Reset button state
+            if (generateButton) {
+                generateButton.disabled = false;
+                generateButton.innerHTML = '<i class="fas fa-magic"></i> Generate Caption';
+            }
+            return;
+        }
+
+        console.log(`🔄 Starting bulk caption generation with ${availableApis.length} API keys for ${files.length} videos`);
+
+        // Process each file with round-robin API key assignment
+        for (let i = 0; i < files.length; i++) {
+            try {
+                const fileData = files[i];
+                const fileName = fileData.fileName.split('.').slice(0, -1).join('.'); // Remove extension
+
+                // Round-robin API key assignment: cycle through available APIs
+                const apiIndex = i % availableApis.length;
+                const assignedApi = availableApis[apiIndex];
+
+                console.log(`🎯 Video ${i + 1}/${files.length} (${fileName}) -> API Key: ${assignedApi.name} (${assignedApi.id})`);
+
+                const result = await fetch(`${API_BASE}/api/gemini/generate-caption`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        fileName,
+                        language,
+                        apiKeyId: assignedApi.id
+                    })
+                });
+                const response = await result.json();
+
+                if (response.success) {
+                    files[i].caption = response.description || '';
+                    successCount++;
+                    console.log(`✅ Video ${i + 1} caption generated successfully`);
+                } else {
+                    console.error(`❌ Caption generation failed for ${fileName} (API: ${assignedApi.name}):`, response.error);
+                    files[i].caption = `Video ${fileName}`; // Fallback caption
+                    errorCount++;
+                }
+            } catch (error) {
+                console.error(`❌ Error generating caption for ${files[i].fileName}:`, error);
+                files[i].caption = `Video ${files[i].fileName.split('.').slice(0, -1).join('.')}`; // Fallback
                 errorCount++;
             }
-        } catch (error) {
-            console.error(`Error generating caption for ${files[i].fileName}:`, error);
-            files[i].caption = `Video ${files[i].fileName.split('.').slice(0, -1).join('.')}`; // Fallback
-            errorCount++;
+        }
+
+        console.log(`📊 Bulk caption generation completed: ${successCount} success, ${errorCount} errors`);
+
+    } catch (apiError) {
+        console.error('❌ Error fetching API keys for round-robin assignment:', apiError);
+        showToast('Gagal mengambil daftar API key. Menggunakan mode fallback.', 'warning');
+
+        // Fallback: generate without specific API key assignment
+        for (let i = 0; i < files.length; i++) {
+            try {
+                const fileData = files[i];
+                const fileName = fileData.fileName.split('.').slice(0, -1).join('.'); // Remove extension
+
+                const result = await fetch(`${API_BASE}/api/gemini/generate-caption`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ fileName, language })
+                });
+                const response = await result.json();
+
+                if (response.success) {
+                    files[i].caption = response.description || '';
+                    successCount++;
+                } else {
+                    console.error(`Caption generation failed for ${fileName}:`, response.error);
+                    files[i].caption = `Video ${fileName}`; // Fallback caption
+                    errorCount++;
+                }
+            } catch (error) {
+                console.error(`Error generating caption for ${files[i].fileName}:`, error);
+                files[i].caption = `Video ${files[i].fileName.split('.').slice(0, -1).join('.')}`; // Fallback
+                errorCount++;
+            }
         }
     }
 
@@ -1133,10 +1284,138 @@ async function generateBulkCaptions() {
     }
 
     if (successCount > 0) {
-        showToast(`${successCount} caption berhasil digenerate`, 'success');
+        showToast(`${successCount} caption berhasil digenerate dengan round-robin API key`, 'success');
     }
     if (errorCount > 0) {
         showToast(`${errorCount} caption menggunakan fallback`, 'warning');
+    }
+}
+
+// Regenerate caption for a single file in bulk upload with API key rotation
+async function regenerateSingleCaption(index) {
+    const files = elements.bulkFilesList._uploadedFiles || [];
+    if (index < 0 || index >= files.length) {
+        showToast('File tidak ditemukan', 'error');
+        return;
+    }
+
+    const fileData = files[index];
+    const fileName = fileData.fileName.split('.').slice(0, -1).join('.'); // Remove extension
+    const language = elements.bulkCaptionLanguage.value;
+
+    if (!fileName) {
+        showToast('Tidak dapat mengekstrak nama file', 'error');
+        return;
+    }
+
+    try {
+        // Disable the regenerate button temporarily
+        const regenerateBtn = document.querySelector(`.bulk-file-item[data-index="${index}"] .bulk-file-regenerate`);
+        if (regenerateBtn) {
+            regenerateBtn.disabled = true;
+            regenerateBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        }
+
+        showToast(`Regenerating caption untuk ${fileData.fileName}...`, 'info');
+
+        // Get all available Gemini API keys for rotation
+        const apisResponse = await fetch(`${API_BASE}/api/gemini/apis`);
+        const apisResult = await apisResponse.json();
+
+        let availableApis = [];
+        if (apisResult && Array.isArray(apisResult)) {
+            availableApis = apisResult.filter(api => api.isValid !== false);
+        }
+
+        if (availableApis.length === 0) {
+            throw new Error('Tidak ada API key Gemini yang valid tersedia');
+        }
+
+        let success = false;
+        let lastError = null;
+
+        // Try each API key until one succeeds
+        for (let apiIndex = 0; apiIndex < availableApis.length; apiIndex++) {
+            const assignedApi = availableApis[apiIndex];
+
+            try {
+                console.log(`🔄 Trying API key: ${assignedApi.name} (${assignedApi.id}) for ${fileData.fileName}`);
+
+                const result = await fetch(`${API_BASE}/api/gemini/generate-caption`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        fileName,
+                        language,
+                        apiKeyId: assignedApi.id
+                    })
+                });
+                const response = await result.json();
+
+                if (response.success) {
+                    // Update the caption in the file data
+                    files[index].caption = response.description || '';
+                    files[index].captionError = null; // Clear any previous error
+
+                    // Update the UI
+                    updateBulkFilesListWithCaptions(files);
+
+                    showToast(`Caption berhasil diregenerate untuk ${fileData.fileName} menggunakan API ${assignedApi.name}!`, 'success');
+                    success = true;
+                    break; // Exit the loop on success
+                } else {
+                    lastError = response.error || 'Unknown error';
+                    console.warn(`❌ API ${assignedApi.name} failed: ${lastError}`);
+
+                    // Continue to next API if this one failed
+                    if (apiIndex < availableApis.length - 1) {
+                        console.log(`🔄 Switching to next API key...`);
+                        continue;
+                    }
+                }
+            } catch (apiError) {
+                lastError = apiError.message || 'API call failed';
+                console.warn(`❌ API ${assignedApi.name} error: ${lastError}`);
+
+                // Continue to next API if this one failed
+                if (apiIndex < availableApis.length - 1) {
+                    console.log(`🔄 Switching to next API key...`);
+                    continue;
+                }
+            }
+        }
+
+        // If all APIs failed, show error
+        if (!success) {
+            files[index].captionError = `All APIs failed. Last error: ${lastError}`;
+            files[index].caption = `Video ${fileName}`; // Fallback caption
+
+            // Update the UI to show error state
+            updateBulkFilesListWithCaptions(files);
+
+            showToast(`Gagal regenerate caption untuk ${fileData.fileName}: Semua API mencapai limit atau error`, 'error');
+        }
+
+    } catch (error) {
+        console.error(`Error regenerating caption for ${fileData.fileName}:`, error);
+
+        // Set fallback caption and error
+        files[index].caption = `Video ${fileName}`;
+        files[index].captionError = error.message || 'Error koneksi';
+
+        // Update the UI
+        updateBulkFilesListWithCaptions(files);
+
+        showToast(`Error: ${error.message}`, 'error');
+    } finally {
+        // Re-enable the regenerate button
+        const regenerateBtn = document.querySelector(`.bulk-file-item[data-index="${index}"] .bulk-file-regenerate`);
+        if (regenerateBtn) {
+            regenerateBtn.disabled = false;
+            regenerateBtn.innerHTML = '<i class="fas fa-redo"></i>';
+        }
     }
 }
 
@@ -1146,15 +1425,21 @@ function updateBulkFilesListWithCaptions(files) {
     if (!bulkFilesList) return;
 
     bulkFilesList.innerHTML = files.map((fileData, index) => `
-        <div class="bulk-file-item" data-index="${index}">
+        <div class="bulk-file-item ${fileData.captionError ? 'caption-error' : ''}" data-index="${index}">
             <div class="bulk-file-name">
                 <i class="fas fa-file-video"></i>
                 ${fileData.fileName}
                 ${fileData.caption ? `<div class="bulk-file-caption">${fileData.caption.substring(0, 100)}${fileData.caption.length > 100 ? '...' : ''}</div>` : ''}
+                ${fileData.captionError ? `<div class="bulk-file-error"><i class="fas fa-exclamation-triangle"></i> ${fileData.captionError}</div>` : ''}
             </div>
-            <button class="bulk-file-remove" onclick="removeBulkFile(${index})">
-                <i class="fas fa-times"></i>
-            </button>
+            <div class="bulk-file-actions">
+                <button class="bulk-file-regenerate" onclick="regenerateSingleCaption(${index})" title="Regenerate Caption">
+                    <i class="fas fa-redo"></i>
+                </button>
+                <button class="bulk-file-remove" onclick="removeBulkFile(${index})">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
         </div>
     `).join('');
 }
@@ -1527,7 +1812,16 @@ window.retryQueueItem = async function(itemId) {
                 await loadAppData();
                 showToast('Item berhasil diatur untuk retry', 'success');
             } else {
-                showToast(`Gagal mengatur retry: ${result.error}`, 'error');
+                // Handle different error types
+                if (response.status === 409) {
+                    showToast('Item sedang diproses. Tunggu hingga proses selesai sebelum mencoba lagi.', 'warning');
+                } else if (response.status === 403) {
+                    showToast('Akses ditolak: Item milik user lain', 'error');
+                } else if (response.status === 404) {
+                    showToast('Item tidak ditemukan. Mungkin sudah dihapus.', 'error');
+                } else {
+                    showToast(`Gagal mengatur retry: ${result.error}`, 'error');
+                }
             }
         } catch (error) {
             showToast(`Error: ${error.message}`, 'error');
@@ -2108,6 +2402,149 @@ window.deleteGeminiApi = async function(apiId) {
 elements.geminiModal?.addEventListener('click', (e) => {
     if (e.target === elements.geminiModal) {
         closeGeminiModal();
+    }
+});
+
+// Bulk Gemini API Functions
+function openBulkGeminiModal() {
+    elements.bulkGeminiForm.reset();
+    elements.bulkGeminiResults.style.display = 'none';
+    elements.bulkGeminiResultsContent.innerHTML = '';
+    elements.bulkGeminiModal.classList.add('show');
+}
+
+function closeBulkGeminiModal() {
+    elements.bulkGeminiModal.classList.remove('show');
+    elements.bulkGeminiForm.reset();
+    elements.bulkGeminiResults.style.display = 'none';
+    elements.bulkGeminiResultsContent.innerHTML = '';
+}
+
+async function saveBulkGeminiApis(e) {
+    e.preventDefault();
+
+    const apiKeysText = elements.bulkGeminiApiKeys.value.trim();
+
+    if (!apiKeysText) {
+        showToast('API keys harus diisi', 'error');
+        return;
+    }
+
+    // Split by lines and filter out empty lines
+    const apiKeys = apiKeysText.split('\n')
+        .map(key => key.trim())
+        .filter(key => key.length > 0);
+
+    if (apiKeys.length === 0) {
+        showToast('Tidak ada API key yang valid', 'error');
+        return;
+    }
+
+    if (apiKeys.length > 50) {
+        showToast('Maksimal 50 API keys sekaligus', 'error');
+        return;
+    }
+
+    try {
+        elements.saveBulkGeminiBtn.disabled = true;
+        elements.saveBulkGeminiBtn.innerHTML = '<div class="loading"></div> Menyimpan...';
+
+        // Show results section
+        elements.bulkGeminiResults.style.display = 'block';
+        elements.bulkGeminiResultsContent.innerHTML = '<div class="bulk-result-item"><div class="loading"></div> Memproses API keys...</div>';
+
+        const results = [];
+        let successCount = 0;
+        let errorCount = 0;
+
+        // Process each API key
+        for (let i = 0; i < apiKeys.length; i++) {
+            const apiKey = apiKeys[i];
+            const apiName = `API Key ${i + 1}`;
+
+            try {
+                const result = await fetch(`${API_BASE}/api/gemini/apis`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        name: apiName,
+                        apiKey: apiKey
+                    })
+                });
+                const response = await result.json();
+
+                if (response.success) {
+                    results.push({
+                        index: i + 1,
+                        name: apiName,
+                        status: 'success',
+                        message: 'Berhasil disimpan'
+                    });
+                    successCount++;
+                } else {
+                    results.push({
+                        index: i + 1,
+                        name: apiName,
+                        status: 'error',
+                        message: response.error || 'Gagal menyimpan'
+                    });
+                    errorCount++;
+                }
+            } catch (error) {
+                results.push({
+                    index: i + 1,
+                    name: apiName,
+                    status: 'error',
+                    message: error.message || 'Error koneksi'
+                });
+                errorCount++;
+            }
+
+            // Update progress display
+            updateBulkResultsDisplay(results);
+        }
+
+        // Final update
+        updateBulkResultsDisplay(results);
+
+        if (successCount > 0) {
+            await updateGeminiDisplay(); // Refresh the main display
+            showToast(`${successCount} API keys berhasil disimpan`, 'success');
+        }
+
+        if (errorCount > 0) {
+            showToast(`${errorCount} API keys gagal disimpan`, 'warning');
+        }
+
+    } catch (error) {
+        showToast(`Error bulk save: ${error.message}`, 'error');
+    } finally {
+        elements.saveBulkGeminiBtn.disabled = false;
+        elements.saveBulkGeminiBtn.innerHTML = '<i class="fas fa-save"></i> Simpan API Keys';
+    }
+}
+
+function updateBulkResultsDisplay(results) {
+    elements.bulkGeminiResultsContent.innerHTML = results.map(result => `
+        <div class="bulk-result-item ${result.status}">
+            <div class="result-info">
+                <span class="result-index">#${result.index}</span>
+                <span class="result-name">${result.name}</span>
+            </div>
+            <div class="result-status">
+                <i class="fas ${result.status === 'success' ? 'fa-check-circle' : 'fa-exclamation-triangle'}"></i>
+                <span>${result.message}</span>
+            </div>
+        </div>
+    `).join('');
+}
+
+// Handle modal click outside for bulk gemini modal
+elements.bulkGeminiModal?.addEventListener('click', (e) => {
+    if (e.target === elements.bulkGeminiModal) {
+        closeBulkGeminiModal();
     }
 });
 

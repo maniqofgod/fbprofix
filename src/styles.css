@@ -239,7 +239,9 @@ body {
     border-bottom: 1px solid var(--glass-border);
     display: flex;
     padding: 16px 24px;
-    position: relative;
+    position: sticky;
+    top: 0;
+    z-index: 100;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
 }
 
@@ -2094,10 +2096,16 @@ body {
     border-bottom: 1px solid #e9ecef;
     font-size: 13px;
     color: #495057;
+    transition: background-color 0.2s ease;
 }
 
 .bulk-file-item:last-child {
     border-bottom: none;
+}
+
+.bulk-file-item.caption-error {
+    background: rgba(239, 68, 68, 0.05);
+    border-left: 3px solid #ef4444;
 }
 
 .bulk-file-item i {
@@ -2116,8 +2124,54 @@ body {
     margin-top: 2px;
 }
 
-.bulk-file-remove {
+.bulk-file-error {
+    font-size: 11px;
+    color: #ef4444;
+    margin-top: 2px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.bulk-file-error i {
+    font-size: 10px;
+}
+
+.bulk-file-actions {
+    display: flex;
+    gap: 6px;
     margin-left: auto;
+}
+
+.bulk-file-regenerate {
+    background: none;
+    border: none;
+    color: #007bff;
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    transition: all 0.2s ease;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+}
+
+.bulk-file-regenerate:hover {
+    background: rgba(0, 123, 255, 0.1);
+    color: #0056b3;
+    transform: scale(1.1);
+}
+
+.bulk-file-regenerate:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.bulk-file-remove {
     background: none;
     border: none;
     color: #dc3545;
@@ -2125,6 +2179,12 @@ body {
     padding: 4px;
     border-radius: 4px;
     transition: background-color 0.2s ease;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
 }
 
 .bulk-file-remove:hover {
@@ -2152,6 +2212,262 @@ body {
 .transition-fade.show {
     opacity: 1;
     transform: translateY(0);
+}
+
+/* Bulk Gemini API Modal Styles */
+.bulk-gemini-modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(10, 10, 15, 0.8);
+    backdrop-filter: blur(8px);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+}
+
+.bulk-gemini-modal.show {
+    display: flex;
+}
+
+.bulk-gemini-modal .modal-content {
+    background: var(--glass-bg);
+    backdrop-filter: var(--backdrop-blur);
+    border: 1px solid var(--glass-border);
+    border-radius: 20px;
+    width: 90%;
+    max-width: 700px;
+    max-height: 90%;
+    overflow-y: auto;
+    box-shadow: 0 25px 50px rgba(10, 10, 15, 0.5);
+    animation: modalSlideIn 0.5s var(--fluid-motion);
+    position: relative;
+}
+
+.bulk-gemini-modal .modal-content::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: var(--gradient-liquid);
+    border-radius: 20px 20px 0 0;
+}
+
+.bulk-gemini-modal .modal-header {
+    padding: 30px 30px 20px;
+    border-bottom: 1px solid var(--glass-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    position: relative;
+}
+
+.bulk-gemini-modal .modal-header::before {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: var(--gradient-liquid);
+}
+
+.bulk-gemini-modal .modal-header h3 {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text-primary);
+    background: var(--gradient-liquid);
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin: 0;
+    letter-spacing: -0.5px;
+}
+
+.bulk-gemini-modal .modal-close {
+    background: var(--glass-bg);
+    backdrop-filter: blur(10px);
+    border: 1px solid var(--glass-border);
+    font-size: 16px;
+    cursor: pointer;
+    padding: 12px;
+    border-radius: 12px;
+    color: var(--text-secondary);
+    transition: all var(--animation-speed) var(--fluid-motion);
+    position: relative;
+    z-index: 10;
+}
+
+.bulk-gemini-modal .modal-close:hover {
+    background: var(--glass-hover);
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+    transform: scale(1.1);
+    box-shadow: 0 8px 20px rgba(102, 126, 234, 0.3);
+}
+
+.bulk-gemini-modal .modal-form {
+    padding: 30px;
+}
+
+.bulk-gemini-modal textarea {
+    min-height: 200px;
+    resize: vertical;
+}
+
+.bulk-gemini-results {
+    margin-top: 20px;
+    padding: 20px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.bulk-gemini-results h4 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 15px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.bulk-gemini-results h4::before {
+    content: '📊';
+    font-size: 18px;
+}
+
+.bulk-gemini-results-content {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.bulk-result-item {
+    display: flex;
+    align-items: center;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    transition: all var(--animation-speed) var(--fluid-motion);
+}
+
+.bulk-result-item:last-child {
+    margin-bottom: 0;
+}
+
+.bulk-result-item.success {
+    background: rgba(34, 197, 94, 0.1);
+    border-color: rgba(34, 197, 94, 0.2);
+}
+
+.bulk-result-item.error {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: rgba(239, 68, 68, 0.2);
+}
+
+.bulk-result-item:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.result-info {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.result-index {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-primary);
+    background: rgba(102, 126, 234, 0.1);
+    padding: 4px 8px;
+    border-radius: 12px;
+    border: 1px solid rgba(102, 126, 234, 0.2);
+    min-width: 32px;
+    text-align: center;
+}
+
+.result-name {
+    font-weight: 500;
+    color: var(--text-primary);
+    font-size: 14px;
+}
+
+.result-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.result-status i {
+    font-size: 14px;
+}
+
+.bulk-result-item.success .result-status {
+    color: #22c55e;
+}
+
+.bulk-result-item.success .result-status i {
+    color: #22c55e;
+}
+
+.bulk-result-item.error .result-status {
+    color: #ef4444;
+}
+
+.bulk-result-item.error .result-status i {
+    color: #ef4444;
+}
+
+/* Responsive for Bulk Gemini Modal */
+@media (max-width: 768px) {
+    .bulk-gemini-modal .modal-content {
+        width: 95%;
+        margin: 10px;
+    }
+
+    .bulk-gemini-modal .modal-header {
+        padding: 20px 20px 15px;
+    }
+
+    .bulk-gemini-modal .modal-header h3 {
+        font-size: 18px;
+    }
+
+    .bulk-gemini-modal .modal-form {
+        padding: 20px;
+    }
+
+    .bulk-gemini-results {
+        padding: 15px;
+    }
+
+    .bulk-result-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+
+    .result-info {
+        width: 100%;
+    }
+
+    .result-status {
+        width: 100%;
+        justify-content: flex-start;
+    }
 }
 
 /* Debug Tab Styles */

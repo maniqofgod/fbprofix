@@ -1,8 +1,10 @@
-const Store = require('electron-store');
+const sqlite3 = require('sqlite3').verbose();
+const path = require('path');
 const CryptoJS = require('crypto-js');
 
-// Inisialisasi electron-store
-const store = new Store();
+// Database setup
+const dbPath = path.join(__dirname, '../../reelsync.db');
+const db = new sqlite3.Database(dbPath);
 
 // Encryption key untuk secure storage
 const ENCRYPTION_KEY = 'reelsync-pro-encryption-key-2024';
@@ -10,11 +12,32 @@ const ENCRYPTION_KEY = 'reelsync-pro-encryption-key-2024';
 /**
  * Account Manager Module
  * Menangani semua operasi terkait manajemen akun Facebook
+ * Now uses SQLite database instead of electron-store
  */
 class AccountManager {
     constructor() {
-        this.store = store;
+        this.db = db;
         this.encryptionKey = ENCRYPTION_KEY;
+
+        // Initialize database table
+        this.initializeTable();
+    }
+
+    initializeTable() {
+        this.db.run(`
+            CREATE TABLE IF NOT EXISTS facebook_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                type TEXT DEFAULT 'personal',
+                cookie TEXT,
+                pages_data TEXT DEFAULT '[]',
+                is_valid INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, name)
+            )
+        `);
     }
 
     /**
@@ -40,229 +63,291 @@ class AccountManager {
     /**
      * Simpan akun baru atau update akun existing
      */
-    async saveAccount(accountData) {
-        try {
-            const accounts = this.getAllAccounts();
+    async saveAccount(accountData, userId = 'default') {
+        return new Promise((resolve) => {
+            try {
+                // Check if account already exists
+                this.db.get('SELECT id, cookie, pages_data, is_valid FROM facebook_accounts WHERE user_id = ? AND name = ?', [userId, accountData.name], (err, existingAccount) => {
+                    if (err) {
+                        console.error('Error checking existing account:', err);
+                        resolve({ success: false, error: err.message });
+                        return;
+                    }
 
-            // Cek apakah akun sudah ada
-            const existingIndex = accounts.findIndex(acc => acc.name === accountData.name);
+                    const isEdit = !!existingAccount;
+                    let encryptedCookie = existingAccount ? existingAccount.cookie : null;
+                    let pagesData = existingAccount ? existingAccount.pages_data : '[]';
+                    let isValid = existingAccount ? existingAccount.is_valid : 0;
 
-            let accountToSave;
+                    // Encrypt cookie if provided
+                    if (accountData.cookie && accountData.cookie.trim()) {
+                        encryptedCookie = this.encrypt(accountData.cookie);
+                        isValid = 0; // Need re-validation
+                        pagesData = '[]';
+                    }
 
-            if (existingIndex >= 0) {
-                // Update existing account
-                const existingAccount = accounts[existingIndex];
-                accountToSave = {
-                    ...existingAccount,
-                    ...accountData,
-                    updatedAt: new Date().toISOString()
-                };
+                    if (isEdit) {
+                        // Update existing account
+                        this.db.run(
+                            'UPDATE facebook_accounts SET type = ?, cookie = ?, pages_data = ?, is_valid = ?, updated_at = ? WHERE user_id = ? AND name = ?',
+                            [accountData.type || 'personal', encryptedCookie, pagesData, isValid, new Date().toISOString(), userId, accountData.name],
+                            async (updateErr) => {
+                                if (updateErr) {
+                                    console.error('Error updating account:', updateErr);
+                                    resolve({ success: false, error: updateErr.message });
+                                    return;
+                                }
 
-                // Only encrypt and update cookie if new cookie provided
-                if (accountData.cookie && accountData.cookie.trim()) {
-                    accountToSave.cookie = this.encrypt(accountData.cookie);
-                    accountToSave.valid = false; // Need re-validation
-                    accountToSave.pages = [];
-                }
-                // If no new cookie, keep existing cookie and validation status
+                                // Validate account if cookie was updated
+                                let validationResult = null;
+                                if (accountData.cookie && accountData.cookie.trim()) {
+                                    validationResult = await this.validateAccount(accountData.name, userId);
+                                }
 
-                accounts[existingIndex] = accountToSave;
-            } else {
-                // New account - cookie required
-                if (!accountData.cookie || !accountData.cookie.trim()) {
-                    return {
-                        success: false,
-                        error: 'Cookie diperlukan untuk akun baru'
-                    };
-                }
+                                resolve({
+                                    success: true,
+                                    account: accountData.name,
+                                    validation: validationResult,
+                                    isEdit: true
+                                });
+                            }
+                        );
+                    } else {
+                        // New account - cookie required
+                        if (!accountData.cookie || !accountData.cookie.trim()) {
+                            resolve({
+                                success: false,
+                                error: 'Cookie diperlukan untuk akun baru'
+                            });
+                            return;
+                        }
 
-                // Encrypt cookie untuk akun baru
-                accountToSave = {
-                    ...accountData,
-                    cookie: this.encrypt(accountData.cookie),
-                    createdAt: new Date().toISOString(),
-                    updatedAt: new Date().toISOString(),
-                    valid: false,
-                    pages: []
-                };
+                        // Insert new account
+                        this.db.run(
+                            'INSERT INTO facebook_accounts (user_id, name, type, cookie, pages_data, is_valid, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                            [userId, accountData.name, accountData.type || 'personal', encryptedCookie, pagesData, isValid, new Date().toISOString(), new Date().toISOString()],
+                            async (insertErr) => {
+                                if (insertErr) {
+                                    console.error('Error inserting account:', insertErr);
+                                    resolve({ success: false, error: insertErr.message });
+                                    return;
+                                }
 
-                accounts.push(accountToSave);
+                                // Validate new account
+                                const validationResult = await this.validateAccount(accountData.name, userId);
+
+                                resolve({
+                                    success: true,
+                                    account: accountData.name,
+                                    validation: validationResult,
+                                    isEdit: false
+                                });
+                            }
+                        );
+                    }
+                });
+            } catch (error) {
+                console.error('Error saving account:', error);
+                resolve({ success: false, error: error.message });
             }
-
-            this.store.set('accounts', accounts);
-
-            // Validasi cookie dan ambil data halaman
-            const validationResult = await this.validateAccount(accountData.name);
-
-            return {
-                success: true,
-                account: accountData.name,
-                validation: validationResult,
-                isEdit: existingIndex >= 0
-            };
-        } catch (error) {
-            console.error('Error saving account:', error);
-            return {
-                success: false,
-                error: error.message
-            };
-        }
+        });
     }
 
     /**
      * Hapus akun
      */
-    async deleteAccount(accountName) {
-        try {
-            const accounts = this.getAllAccounts();
-            const filteredAccounts = accounts.filter(acc => acc.name !== accountName);
-            this.store.set('accounts', filteredAccounts);
+    async deleteAccount(accountName, userId = 'default') {
+        return new Promise((resolve) => {
+            try {
+                this.db.run('DELETE FROM facebook_accounts WHERE user_id = ? AND name = ?', [userId, accountName], function(err) {
+                    if (err) {
+                        console.error('Error deleting account:', err);
+                        resolve({ success: false, error: err.message });
+                        return;
+                    }
 
-            return {
-                success: true,
-                message: `Akun ${accountName} berhasil dihapus`
-            };
-        } catch (error) {
-            console.error('Error deleting account:', error);
-            return {
-                success: false,
-                error: error.message
-            };
-        }
+                    if (this.changes > 0) {
+                        resolve({
+                            success: true,
+                            message: `Akun ${accountName} berhasil dihapus`
+                        });
+                    } else {
+                        resolve({ success: false, error: 'Akun tidak ditemukan' });
+                    }
+                });
+            } catch (error) {
+                console.error('Error deleting account:', error);
+                resolve({ success: false, error: error.message });
+            }
+        });
     }
 
     /**
       * Ambil semua akun
       */
-    getAllAccounts() {
-        try {
-            const accounts = this.store.get('accounts', []);
+    getAllAccounts(userId = 'default') {
+        return new Promise((resolve) => {
+            try {
+                this.db.all('SELECT * FROM facebook_accounts WHERE user_id = ? ORDER BY created_at DESC', [userId], (err, rows) => {
+                    if (err) {
+                        console.error('Error getting accounts:', err);
+                        resolve([]);
+                        return;
+                    }
 
-            // Decrypt cookies untuk setiap akun dan ensure type exists
-            return accounts.map(account => ({
-                ...account,
-                cookie: this.decrypt(account.cookie),
-                type: account.type || 'personal' // Default to personal for legacy accounts
-            }));
-        } catch (error) {
-            console.error('Error getting accounts:', error);
-            return [];
-        }
+                    // Decrypt cookies untuk setiap akun dan format data
+                    const accounts = rows.map(account => ({
+                        id: account.id,
+                        name: account.name,
+                        type: account.type || 'personal',
+                        cookie: this.decrypt(account.cookie),
+                        pages: account.pages_data ? JSON.parse(account.pages_data) : [],
+                        valid: account.is_valid === 1,
+                        createdAt: account.created_at,
+                        updatedAt: account.updated_at
+                    }));
+
+                    resolve(accounts);
+                });
+            } catch (error) {
+                console.error('Error getting accounts:', error);
+                resolve([]);
+            }
+        });
     }
 
     /**
       * Ambil akun berdasarkan nama
       */
-    getAccount(accountName) {
-        try {
-            const accounts = this.getAllAccounts();
-            const account = accounts.find(acc => acc.name === accountName);
-            if (account) {
-                // Ensure account has type (default to personal for legacy accounts)
-                if (!account.type) {
-                    account.type = 'personal';
-                }
-                return account;
+    getAccount(accountName, userId = 'default') {
+        return new Promise((resolve) => {
+            try {
+                this.db.get('SELECT * FROM facebook_accounts WHERE user_id = ? AND name = ?', [userId, accountName], (err, account) => {
+                    if (err) {
+                        console.error('Error getting account:', err);
+                        resolve(null);
+                        return;
+                    }
+
+                    if (!account) {
+                        resolve(null);
+                        return;
+                    }
+
+                    // Decrypt cookie dan format data
+                    const formattedAccount = {
+                        id: account.id,
+                        name: account.name,
+                        type: account.type || 'personal',
+                        cookie: this.decrypt(account.cookie),
+                        pages: account.pages_data ? JSON.parse(account.pages_data) : [],
+                        valid: account.is_valid === 1,
+                        createdAt: account.created_at,
+                        updatedAt: account.updated_at
+                    };
+
+                    resolve(formattedAccount);
+                });
+            } catch (error) {
+                console.error('Error getting account:', error);
+                resolve(null);
             }
-            return null;
-        } catch (error) {
-            console.error('Error getting account:', error);
-            return null;
-        }
+        });
     }
 
     /**
      * Validasi cookie dan ambil data halaman Facebook
      */
-    async validateAccount(accountName) {
-        try {
-            const account = this.getAccount(accountName);
+    async validateAccount(accountName, userId = 'default') {
+        return new Promise(async (resolve) => {
+            try {
+                const account = await this.getAccount(accountName, userId);
 
-            if (!account) {
-                return {
-                    success: false,
-                    error: 'Akun tidak ditemukan'
-                };
-            }
-
-            // Check if account is already valid and recently validated (within 24 hours)
-            if (account.valid && account.lastValidated) {
-                const lastValidated = new Date(account.lastValidated);
-                const now = new Date();
-                const hoursSinceValidation = (now - lastValidated) / (1000 * 60 * 60);
-
-                if (hoursSinceValidation < 24 && account.pages && account.pages.length > 0) {
-                    console.log(`Account ${accountName} already valid (validated ${hoursSinceValidation.toFixed(1)} hours ago)`);
-                    return {
-                        success: true,
-                        pages: account.pages,
-                        message: `Akun ${accountName} sudah valid`,
-                        fromCache: true
-                    };
-                }
-            }
-
-            if (!account.cookie) {
-                return {
-                    success: false,
-                    error: 'Cookie tidak ditemukan'
-                };
-            }
-
-            console.log(`Validating account: ${accountName} (Type: ${account.type})`);
-
-            // Gunakan FacebookAutomation untuk validasi nyata
-            const FacebookAutomation = require('./facebook-automation');
-            const facebookAutomation = new FacebookAutomation();
-
-            const validationResult = await facebookAutomation.validateCookieAndGetPages(account.cookie, account.type);
-
-            if (validationResult.success) {
-                // Update status akun
-                const accounts = this.store.get('accounts', []);
-                const accountIndex = accounts.findIndex(acc => acc.name === accountName);
-
-                if (accountIndex >= 0) {
-                    accounts[accountIndex].valid = true;
-                    accounts[accountIndex].pages = validationResult.pages;
-                    accounts[accountIndex].lastValidated = new Date().toISOString();
-                    this.store.set('accounts', accounts);
+                if (!account) {
+                    resolve({
+                        success: false,
+                        error: 'Akun tidak ditemukan'
+                    });
+                    return;
                 }
 
-                console.log(`Account ${accountName} validated successfully with ${validationResult.pages.length} pages`);
+                // Check if account is already valid and recently validated (within 24 hours)
+                if (account.valid && account.lastValidated) {
+                    const lastValidated = new Date(account.lastValidated);
+                    const now = new Date();
+                    const hoursSinceValidation = (now - lastValidated) / (1000 * 60 * 60);
 
-                return {
-                    success: true,
-                    pages: validationResult.pages,
-                    message: `Akun ${accountName} berhasil divalidasi`,
-                    fromCache: false
-                };
-            } else {
-                // Update status akun sebagai tidak valid
-                const accounts = this.store.get('accounts', []);
-                const accountIndex = accounts.findIndex(acc => acc.name === accountName);
-
-                if (accountIndex >= 0) {
-                    accounts[accountIndex].valid = false;
-                    accounts[accountIndex].lastValidated = new Date().toISOString();
-                    accounts[accountIndex].error = validationResult.error;
-                    this.store.set('accounts', accounts);
+                    if (hoursSinceValidation < 24 && account.pages && account.pages.length > 0) {
+                        console.log(`Account ${accountName} already valid (validated ${hoursSinceValidation.toFixed(1)} hours ago)`);
+                        resolve({
+                            success: true,
+                            pages: account.pages,
+                            message: `Akun ${accountName} sudah valid`,
+                            fromCache: true
+                        });
+                        return;
+                    }
                 }
 
-                console.log(`Account ${accountName} validation failed: ${validationResult.error}`);
+                if (!account.cookie) {
+                    resolve({
+                        success: false,
+                        error: 'Cookie tidak ditemukan'
+                    });
+                    return;
+                }
 
-                return {
+                console.log(`Validating account: ${accountName} (Type: ${account.type})`);
+
+                // Gunakan FacebookAutomation untuk validasi nyata
+                const FacebookAutomation = require('./facebook-automation');
+                const facebookAutomation = new FacebookAutomation();
+
+                const validationResult = await facebookAutomation.validateCookieAndGetPages(account.cookie, account.type);
+
+                if (validationResult.success) {
+                    // Update status akun di database
+                    this.db.run(
+                        'UPDATE facebook_accounts SET pages_data = ?, is_valid = ?, updated_at = ? WHERE user_id = ? AND name = ?',
+                        [JSON.stringify(validationResult.pages), 1, new Date().toISOString(), userId, accountName],
+                        (updateErr) => {
+                            if (updateErr) {
+                                console.error('Error updating account validation:', updateErr);
+                            }
+                            console.log(`Account ${accountName} validated successfully with ${validationResult.pages.length} pages`);
+                            resolve({
+                                success: true,
+                                pages: validationResult.pages,
+                                message: `Akun ${accountName} berhasil divalidasi`,
+                                fromCache: false
+                            });
+                        }
+                    );
+                } else {
+                    // Update status akun sebagai tidak valid
+                    this.db.run(
+                        'UPDATE facebook_accounts SET pages_data = ?, is_valid = ?, updated_at = ? WHERE user_id = ? AND name = ?',
+                        ['[]', 0, new Date().toISOString(), userId, accountName],
+                        (updateErr) => {
+                            if (updateErr) {
+                                console.error('Error updating account validation:', updateErr);
+                            }
+                            console.log(`Account ${accountName} validation failed: ${validationResult.error}`);
+                            resolve({
+                                success: false,
+                                error: validationResult.error
+                            });
+                        }
+                    );
+                }
+            } catch (error) {
+                console.error('Error validating account:', error);
+                resolve({
                     success: false,
-                    error: validationResult.error
-                };
+                    error: error.message
+                });
             }
-        } catch (error) {
-            console.error('Error validating account:', error);
-            return {
-                success: false,
-                error: error.message
-            };
-        }
+        });
     }
 
 
@@ -298,73 +383,88 @@ class AccountManager {
     /**
      * Update status validasi akun
      */
-    updateAccountValidation(accountName, isValid, pages = []) {
-        try {
-            const accounts = this.store.get('accounts', []);
-            const accountIndex = accounts.findIndex(acc => acc.name === accountName);
+    updateAccountValidation(accountName, isValid, pages = [], userId = 'default') {
+        return new Promise((resolve) => {
+            try {
+                this.db.run(
+                    'UPDATE facebook_accounts SET pages_data = ?, is_valid = ?, updated_at = ? WHERE user_id = ? AND name = ?',
+                    [JSON.stringify(pages), isValid ? 1 : 0, new Date().toISOString(), userId, accountName],
+                    function(err) {
+                        if (err) {
+                            console.error('Error updating account validation:', err);
+                            resolve({ success: false, error: err.message });
+                            return;
+                        }
 
-            if (accountIndex >= 0) {
-                accounts[accountIndex].valid = isValid;
-                accounts[accountIndex].pages = pages;
-                accounts[accountIndex].lastValidated = new Date().toISOString();
-
-                if (!isValid) {
-                    accounts[accountIndex].error = 'Validasi gagal';
-                }
-
-                this.store.set('accounts', accounts);
-                return { success: true };
+                        if (this.changes > 0) {
+                            resolve({ success: true });
+                        } else {
+                            resolve({ success: false, error: 'Akun tidak ditemukan' });
+                        }
+                    }
+                );
+            } catch (error) {
+                console.error('Error updating account validation:', error);
+                resolve({ success: false, error: error.message });
             }
-
-            return { success: false, error: 'Akun tidak ditemukan' };
-        } catch (error) {
-            console.error('Error updating account validation:', error);
-            return { success: false, error: error.message };
-        }
+        });
     }
 
     /**
      * Cek apakah ada akun yang valid
      */
-    hasValidAccounts() {
-        const accounts = this.getAllAccounts();
+    async hasValidAccounts(userId = 'default') {
+        const accounts = await this.getAllAccounts(userId);
         return accounts.some(acc => acc.valid);
     }
 
     /**
      * Ambil akun yang valid saja
      */
-    getValidAccounts() {
-        const accounts = this.getAllAccounts();
+    async getValidAccounts(userId = 'default') {
+        const accounts = await this.getAllAccounts(userId);
         return accounts.filter(acc => acc.valid);
     }
 
     /**
      * Bersihkan semua data akun
      */
-    clearAllAccounts() {
-        try {
-            this.store.set('accounts', []);
-            return { success: true, message: 'Semua akun berhasil dihapus' };
-        } catch (error) {
-            return { success: false, error: error.message };
-        }
+    clearAllAccounts(userId = 'default') {
+        return new Promise((resolve) => {
+            try {
+                this.db.run('DELETE FROM facebook_accounts WHERE user_id = ?', [userId], function(err) {
+                    if (err) {
+                        console.error('Error clearing accounts:', err);
+                        resolve({ success: false, error: err.message });
+                        return;
+                    }
+
+                    resolve({
+                        success: true,
+                        message: `Semua akun berhasil dihapus (${this.changes} akun)`
+                    });
+                });
+            } catch (error) {
+                console.error('Error clearing accounts:', error);
+                resolve({ success: false, error: error.message });
+            }
+        });
     }
 
     /**
      * Export data akun (untuk backup)
      */
-    exportAccounts() {
+    async exportAccounts(userId = 'default') {
         try {
-            const accounts = this.getAllAccounts();
+            const accounts = await this.getAllAccounts(userId);
             // Remove sensitive data untuk export
             const exportData = accounts.map(acc => ({
                 name: acc.name,
+                type: acc.type,
                 createdAt: acc.createdAt,
                 updatedAt: acc.updatedAt,
                 valid: acc.valid,
-                pages: acc.pages,
-                lastValidated: acc.lastValidated
+                pages: acc.pages
             }));
 
             return {
@@ -380,42 +480,73 @@ class AccountManager {
     /**
      * Import data akun (dari backup)
      */
-    importAccounts(importData) {
+    async importAccounts(importData, userId = 'default') {
         try {
             if (!Array.isArray(importData)) {
                 return { success: false, error: 'Format data tidak valid' };
             }
 
-            const existingAccounts = this.getAllAccounts();
-            const mergedAccounts = [...existingAccounts];
+            let imported = 0;
+            let skipped = 0;
 
-            importData.forEach(importAccount => {
-                const existingIndex = mergedAccounts.findIndex(acc => acc.name === importAccount.name);
+            for (const importAccount of importData) {
+                try {
+                    // Check if account exists
+                    const existingAccount = await this.getAccount(importAccount.name, userId);
 
-                if (existingIndex >= 0) {
-                    // Update existing account
-                    mergedAccounts[existingIndex] = {
-                        ...mergedAccounts[existingIndex],
-                        ...importAccount,
-                        updatedAt: new Date().toISOString()
-                    };
-                } else {
-                    // Add new account
-                    mergedAccounts.push({
-                        ...importAccount,
-                        cookie: '', // Cookie harus dimasukkan manual untuk keamanan
-                        updatedAt: new Date().toISOString()
-                    });
+                    if (existingAccount) {
+                        // Update existing account (without cookie for security)
+                        await new Promise((resolve, reject) => {
+                            this.db.run(
+                                'UPDATE facebook_accounts SET type = ?, pages_data = ?, is_valid = ?, updated_at = ? WHERE user_id = ? AND name = ?',
+                                [
+                                    importAccount.type || 'personal',
+                                    JSON.stringify(importAccount.pages || []),
+                                    importAccount.valid ? 1 : 0,
+                                    new Date().toISOString(),
+                                    userId,
+                                    importAccount.name
+                                ],
+                                function(err) {
+                                    if (err) reject(err);
+                                    else resolve();
+                                }
+                            );
+                        });
+                        skipped++;
+                    } else {
+                        // Insert new account (without cookie for security)
+                        await new Promise((resolve, reject) => {
+                            this.db.run(
+                                'INSERT INTO facebook_accounts (user_id, name, type, pages_data, is_valid, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                                [
+                                    userId,
+                                    importAccount.name,
+                                    importAccount.type || 'personal',
+                                    JSON.stringify(importAccount.pages || []),
+                                    importAccount.valid ? 1 : 0,
+                                    importAccount.createdAt || new Date().toISOString(),
+                                    new Date().toISOString()
+                                ],
+                                function(err) {
+                                    if (err) reject(err);
+                                    else resolve();
+                                }
+                            );
+                        });
+                        imported++;
+                    }
+                } catch (error) {
+                    console.error(`Error importing account ${importAccount.name}:`, error);
+                    skipped++;
                 }
-            });
-
-            this.store.set('accounts', mergedAccounts);
+            }
 
             return {
                 success: true,
-                message: `${importData.length} akun berhasil diimpor`,
-                imported: importData.length,
-                skipped: 0
+                message: `${imported} akun berhasil diimpor, ${skipped} dilewati`,
+                imported: imported,
+                skipped: skipped
             };
         } catch (error) {
             return { success: false, error: error.message };
@@ -425,17 +556,27 @@ class AccountManager {
     /**
      * Get account statistics
      */
-    getAccountStats() {
-        const accounts = this.getAllAccounts();
-        const validAccounts = accounts.filter(acc => acc.valid);
-        const totalPages = accounts.reduce((total, acc) => total + (acc.pages ? acc.pages.length : 0), 0);
+    async getAccountStats(userId = 'default') {
+        try {
+            const accounts = await this.getAllAccounts(userId);
+            const validAccounts = accounts.filter(acc => acc.valid);
+            const totalPages = accounts.reduce((total, acc) => total + (acc.pages ? acc.pages.length : 0), 0);
 
-        return {
-            total: accounts.length,
-            valid: validAccounts.length,
-            invalid: accounts.length - validAccounts.length,
-            totalPages: totalPages
-        };
+            return {
+                total: accounts.length,
+                valid: validAccounts.length,
+                invalid: accounts.length - validAccounts.length,
+                totalPages: totalPages
+            };
+        } catch (error) {
+            console.error('Error getting account stats:', error);
+            return {
+                total: 0,
+                valid: 0,
+                invalid: 0,
+                totalPages: 0
+            };
+        }
     }
 }
 

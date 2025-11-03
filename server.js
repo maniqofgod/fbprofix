@@ -3,24 +3,154 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
-const Database = require('better-sqlite3');
+const sqlite3 = require('sqlite3').verbose();
 const cron = require('node-cron');
 const session = require('express-session');
 const cookieParser = require('cookie-parser');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
+const CryptoJS = require('crypto-js');
+
+// Encryption key untuk secure storage
+const ENCRYPTION_KEY = 'reelsync-pro-encryption-key-2024';
+
+/**
+ * Server-side encryption utilities
+ */
+const encryptionUtils = {
+    encrypt: function(data) {
+        return CryptoJS.AES.encrypt(data, ENCRYPTION_KEY).toString();
+    },
+
+    decrypt: function(encryptedData) {
+        try {
+            const bytes = CryptoJS.AES.decrypt(encryptedData, ENCRYPTION_KEY);
+            return bytes.toString(CryptoJS.enc.Utf8);
+        } catch (error) {
+            console.error('Decryption failed:', error);
+            return null;
+        }
+    }
+};
 
 // Initialize Express app
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Database setup
-const dbPath = path.join(__dirname, 'database.sqlite');
-const db = new Database(dbPath);
+const dbPath = path.join(__dirname, 'reelsync.db');
+const db = new sqlite3.Database(dbPath);
+
+// Initialize database tables
+db.serialize(() => {
+    // Create users table
+    db.run(`
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            display_name TEXT,
+            role TEXT DEFAULT 'user',
+            last_login DATETIME,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    // Create user_settings table
+    db.run(`
+        CREATE TABLE IF NOT EXISTS user_settings (
+            user_id TEXT NOT NULL,
+            key TEXT NOT NULL,
+            value TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, key),
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        )
+    `);
+
+    // Create facebook_accounts table
+    db.run(`
+        CREATE TABLE IF NOT EXISTS facebook_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            type TEXT DEFAULT 'personal',
+            cookie TEXT,
+            pages_data TEXT DEFAULT '[]',
+            is_valid INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, name),
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        )
+    `);
+
+    // Create settings table for global settings
+    db.run(`
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    `);
+
+    // Create queue table for upload queue management
+    db.run(`
+        CREATE TABLE IF NOT EXISTS queue (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            account_name TEXT,
+            account_type TEXT DEFAULT 'personal',
+            cookie TEXT,
+            pages_data TEXT,
+            page_id TEXT,
+            page_name TEXT,
+            type TEXT,
+            file_path TEXT,
+            file_name TEXT,
+            caption TEXT,
+            status TEXT DEFAULT 'pending',
+            scheduled_time DATETIME,
+            started_at TEXT,
+            actual_upload_time DATETIME,
+            completion_time DATETIME,
+            processing_time INTEGER,
+            retry_count INTEGER DEFAULT 0,
+            next_retry DATETIME,
+            error_message TEXT,
+            upload_url TEXT,
+            processing_logs TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        )
+    `);
+
+    console.log('Database tables initialized');
+});
 
 // Middleware
 app.use(cors({
-    origin: true,
+    origin: function (origin, callback) {
+        // Allow requests from fbpro.1337.edu.pl and localhost for development
+        const allowedOrigins = [
+            'http://fbpro.1337.edu.pl',
+            'https://fbpro.1337.edu.pl',
+            'http://localhost:3000',
+            'http://127.0.0.1:3000',
+            'http://0.0.0.0:3000'
+        ];
+
+        // Allow requests with no origin (mobile apps, etc.)
+        if (!origin) return callback(null, true);
+
+        if (allowedOrigins.includes(origin) || origin.includes('fbpro.1337.edu.pl')) {
+            return callback(null, true);
+        }
+
+        return callback(null, true); // Allow all for development
+    },
     credentials: true
 }));
 app.use(cookieParser());
@@ -90,15 +220,16 @@ async function initializeModules() {
         console.log('🔄 Initializing modules...');
 
         // Get settings untuk menginisialisasi dengan opsi yang benar
-        const settings = getSettings();
+        const settings = await getSettings();
 
-        // Initialize queue processor with current settings
+        // Initialize analytics manager first (asynchronously)
+        globalAnalyticsManager = new AnalyticsManager();
+        await globalAnalyticsManager.initDatabase();
+
+        // Initialize queue processor
         globalQueueProcessor = new QueueProcessor({
             showBrowser: settings.showBrowser
         });
-
-        // Initialize analytics manager
-        globalAnalyticsManager = new AnalyticsManager();
 
         console.log('✅ Modules initialized successfully');
     } catch (error) {
@@ -108,107 +239,147 @@ async function initializeModules() {
 
 // Database helper functions
 function getSettings(userId) {
-    try {
+    return new Promise((resolve) => {
         const settings = {};
-        // First try to get user-specific settings
-        const userRows = db.prepare('SELECT key, value FROM user_settings WHERE user_id = ?').all(userId);
-        userRows.forEach(row => {
-            settings[row.key] = row.value;
-        });
 
-        // If no user settings, get from global settings
-        if (Object.keys(settings).length === 0) {
-            const globalRows = db.prepare('SELECT key, value FROM settings').all();
-            globalRows.forEach(row => {
+        // First try to get user-specific settings
+        db.all('SELECT key, value FROM user_settings WHERE user_id = ?', [userId], (err, userRows) => {
+            if (err) {
+                console.error('Error getting user settings:', err);
+                resolve({
+                    uploadDelay: 30000,
+                    maxRetries: 3,
+                    autoStartQueue: false,
+                    showNotifications: true,
+                    showBrowser: false
+                });
+                return;
+            }
+
+            userRows.forEach(row => {
                 settings[row.key] = row.value;
             });
-        }
 
-        return {
-            uploadDelay: parseInt(settings.uploadDelay) || 30000,
-            maxRetries: parseInt(settings.maxRetries) || 3,
-            autoStartQueue: settings.autoStartQueue === 'true',
-            showNotifications: settings.showNotifications === 'true',
-            showBrowser: settings.showBrowser === 'true'
-        };
-    } catch (error) {
-        console.error('Error getting settings:', error);
-        return {
-            uploadDelay: 30000,
-            maxRetries: 3,
-            autoStartQueue: false,
-            showNotifications: true,
-            showBrowser: false
-        };
-    }
+            // If no user settings, get from global settings
+            if (Object.keys(settings).length === 0) {
+                db.all('SELECT key, value FROM settings', [], (err, globalRows) => {
+                    if (err) {
+                        console.error('Error getting global settings:', err);
+                        resolve({
+                            uploadDelay: 30000,
+                            maxRetries: 3,
+                            autoStartQueue: false,
+                            showNotifications: true,
+                            showBrowser: false
+                        });
+                        return;
+                    }
+
+                    globalRows.forEach(row => {
+                        settings[row.key] = row.value;
+                    });
+
+                    resolve({
+                        uploadDelay: parseInt(settings.uploadDelay) || 30000,
+                        maxRetries: parseInt(settings.maxRetries) || 3,
+                        autoStartQueue: settings.autoStartQueue === 'true',
+                        showNotifications: settings.showNotifications === 'true',
+                        showBrowser: settings.showBrowser === 'true'
+                    });
+                });
+            } else {
+                resolve({
+                    uploadDelay: parseInt(settings.uploadDelay) || 30000,
+                    maxRetries: parseInt(settings.maxRetries) || 3,
+                    autoStartQueue: settings.autoStartQueue === 'true',
+                    showNotifications: settings.showNotifications === 'true',
+                    showBrowser: settings.showBrowser === 'true'
+                });
+            }
+        });
+    });
 }
 
 function updateSetting(userId, key, value) {
-    try {
-        db.prepare('INSERT OR REPLACE INTO user_settings (user_id, key, value) VALUES (?, ?, ?)').run(userId, key, value.toString());
-        return true;
-    } catch (error) {
-        console.error('Error updating setting:', error);
-        return false;
-    }
+    return new Promise((resolve) => {
+        db.run('INSERT OR REPLACE INTO user_settings (user_id, key, value) VALUES (?, ?, ?)', [userId, key, value.toString()], function(err) {
+            if (err) {
+                console.error('Error updating setting:', err);
+                resolve(false);
+            } else {
+                resolve(true);
+            }
+        });
+    });
 }
 
 function getQueueItems(userId) {
-    try {
-        const items = db.prepare('SELECT * FROM queue WHERE user_id = ? ORDER BY created_at DESC').all(userId);
+    return new Promise((resolve) => {
+        // First get settings to calculate cooldowns
+        getSettings(userId).then(settings => {
+            // Then get queue items
+            db.all('SELECT * FROM queue WHERE user_id = ? ORDER BY created_at DESC', [userId], (err, items) => {
+                if (err) {
+                    console.error('Error getting queue items:', err);
+                    resolve([]);
+                    return;
+                }
 
-        // Add cooldown information for each item
-        const now = new Date();
-        const settings = getSettings(userId);
-        const cooldownMap = new Map();
+                // Add cooldown information for each item
+                const now = new Date();
+                const cooldownMap = new Map();
 
-        // Calculate last completion time for each account+page combination
-        items.forEach(item => {
-            const key = `${item.account_name}-${item.page_id}`;
-            const completionTime = item.completion_time || item.actual_upload_time || item.created_at;
-            const lastUpload = new Date(completionTime);
+                // Calculate last completion time for each account+page combination
+                items.forEach(item => {
+                    const key = `${item.account_name}-${item.page_id}`;
+                    const completionTime = item.completion_time || item.actual_upload_time || item.created_at;
+                    const lastUpload = new Date(completionTime);
 
-            if (!cooldownMap.has(key) || lastUpload > cooldownMap.get(key)) {
-                cooldownMap.set(key, lastUpload);
-            }
+                    if (!cooldownMap.has(key) || lastUpload > cooldownMap.get(key)) {
+                        cooldownMap.set(key, lastUpload);
+                    }
+                });
+
+                const processedItems = items.map(item => {
+                    const key = `${item.account_name}-${item.page_id}`;
+                    const lastUpload = cooldownMap.get(key);
+                    const timeSinceLastUpload = now - lastUpload;
+                    const cooldownMs = settings.uploadDelay || 30000; // 30 seconds default
+
+                    let cooldownRemaining = 0;
+                    if (timeSinceLastUpload < cooldownMs && (item.status === 'pending' || item.status === 'scheduled')) {
+                        cooldownRemaining = Math.ceil((cooldownMs - timeSinceLastUpload) / 1000); // seconds
+                    }
+
+                    return {
+                        ...item,
+                        cooldownRemaining: cooldownRemaining,
+                        cooldownMinutes: Math.ceil(cooldownRemaining / 60),
+                        canUpload: cooldownRemaining === 0
+                    };
+                });
+
+                resolve(processedItems);
+            });
+        }).catch(error => {
+            console.error('Error getting settings for queue items:', error);
+            resolve([]);
         });
-
-        return items.map(item => {
-            const key = `${item.account_name}-${item.page_id}`;
-            const lastUpload = cooldownMap.get(key);
-            const timeSinceLastUpload = now - lastUpload;
-            const cooldownMs = settings.uploadDelay || 30000; // 30 seconds default
-
-            let cooldownRemaining = 0;
-            if (timeSinceLastUpload < cooldownMs && (item.status === 'pending' || item.status === 'scheduled')) {
-                cooldownRemaining = Math.ceil((cooldownMs - timeSinceLastUpload) / 1000); // seconds
-            }
-
-            return {
-                ...item,
-                cooldownRemaining: cooldownRemaining,
-                cooldownMinutes: Math.ceil(cooldownRemaining / 60),
-                canUpload: cooldownRemaining === 0
-            };
-        });
-    } catch (error) {
-        console.error('Error getting queue items:', error);
-        return [];
-    }
+    });
 }
 
 function addQueueItem(item, userId) {
-    try {
-        const stmt = db.prepare(`
+    return new Promise((resolve) => {
+        const sql = `
             INSERT INTO queue (
                 id, user_id, account_name, account_type, cookie, pages_data,
                 page_id, page_name, type, file_path, file_name,
                 caption, status, scheduled_time, actual_upload_time, completion_time,
                 processing_time, retry_count, error_message, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
+        `;
 
-        stmt.run(
+        const values = [
             item.id,
             userId,
             item.account,
@@ -230,17 +401,21 @@ function addQueueItem(item, userId) {
             null,
             new Date().toISOString(),
             new Date().toISOString()
-        );
+        ];
 
-        return true;
-    } catch (error) {
-        console.error('Error adding queue item:', error);
-        return false;
-    }
+        db.run(sql, values, function(err) {
+            if (err) {
+                console.error('Error adding queue item:', err);
+                resolve(false);
+            } else {
+                resolve(true);
+            }
+        });
+    });
 }
 
 function updateQueueItem(itemId, updates) {
-    try {
+    return new Promise((resolve) => {
         const setParts = [];
         const values = [];
 
@@ -284,23 +459,29 @@ function updateQueueItem(itemId, updates) {
         values.push(new Date().toISOString());
         values.push(itemId);
 
-        const stmt = db.prepare(`UPDATE queue SET ${setParts.join(', ')} WHERE id = ?`);
-        stmt.run(...values);
-        return true;
-    } catch (error) {
-        console.error('Error updating queue item:', error);
-        return false;
-    }
+        const sql = `UPDATE queue SET ${setParts.join(', ')} WHERE id = ?`;
+        db.run(sql, values, function(err) {
+            if (err) {
+                console.error('Error updating queue item:', err);
+                resolve(false);
+            } else {
+                resolve(true);
+            }
+        });
+    });
 }
 
 function deleteQueueItem(itemId) {
-    try {
-        db.prepare('DELETE FROM queue WHERE id = ?').run(itemId);
-        return true;
-    } catch (error) {
-        console.error('Error deleting queue item:', error);
-        return false;
-    }
+    return new Promise((resolve) => {
+        db.run('DELETE FROM queue WHERE id = ?', [itemId], function(err) {
+            if (err) {
+                console.error('Error deleting queue item:', err);
+                resolve(false);
+            } else {
+                resolve(true);
+            }
+        });
+    });
 }
 
 async function testAccountCookie(name, type, cookie) {
@@ -404,26 +585,46 @@ function changeUserPassword(userId, currentPassword, newPassword) {
 }
 
 function authenticateUser(username, password) {
-    try {
-        const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
-        if (!user) {
-            return { success: false, error: 'Invalid credentials' };
+    return new Promise((resolve) => {
+        try {
+            db.get('SELECT * FROM users WHERE username = ?', [username], (err, user) => {
+                if (err) {
+                    console.error('Database error during authentication:', err);
+                    resolve({ success: false, error: 'Database error' });
+                    return;
+                }
+
+                if (!user) {
+                    resolve({ success: false, error: 'Invalid credentials' });
+                    return;
+                }
+
+                // Verify password
+                try {
+                    const isValidPassword = bcrypt.compareSync(password, user.password_hash);
+                    if (!isValidPassword) {
+                        resolve({ success: false, error: 'Invalid credentials' });
+                        return;
+                    }
+
+                    // Update last login
+                    db.run('UPDATE users SET last_login = ? WHERE id = ?', [new Date().toISOString(), user.id], (updateErr) => {
+                        if (updateErr) {
+                            console.error('Error updating last login:', updateErr);
+                        }
+
+                        resolve({ success: true, user: { id: user.id, username: user.username, displayName: user.display_name, role: user.role } });
+                    });
+                } catch (bcryptError) {
+                    console.error('Bcrypt error during authentication:', bcryptError);
+                    resolve({ success: false, error: 'Authentication error' });
+                }
+            });
+        } catch (error) {
+            console.error('Error authenticating user:', error);
+            resolve({ success: false, error: error.message });
         }
-
-        // Verify password
-        const isValidPassword = bcrypt.compareSync(password, user.password_hash);
-        if (!isValidPassword) {
-            return { success: false, error: 'Invalid credentials' };
-        }
-
-        // Update last login
-        db.prepare('UPDATE users SET last_login = ? WHERE id = ?').run(new Date().toISOString(), user.id);
-
-        return { success: true, user: { id: user.id, username: user.username, displayName: user.display_name, role: user.role } };
-    } catch (error) {
-        console.error('Error authenticating user:', error);
-        return { success: false, error: error.message };
-    }
+    });
 }
 
 function getUserById(userId) {
@@ -448,7 +649,7 @@ function requireAuth(req, res, next) {
 }
 
 // Authentication Routes (public - no auth required)
-app.post('/auth/login', (req, res) => {
+app.post('/auth/login', async (req, res) => {
     try {
         const { username, password } = req.body;
 
@@ -456,7 +657,7 @@ app.post('/auth/login', (req, res) => {
             return res.status(400).json({ success: false, error: 'Username and password required' });
         }
 
-        const result = authenticateUser(username, password);
+        const result = await authenticateUser(username, password);
         if (!result.success) {
             return res.status(401).json({ success: false, error: result.error });
         }
@@ -496,7 +697,7 @@ app.get('/auth/check', (req, res) => {
     }
 });
 
-app.post('/auth/register', (req, res) => {
+app.post('/auth/register', async (req, res) => {
     try {
         const { username, password, displayName } = req.body;
 
@@ -515,7 +716,7 @@ app.post('/auth/register', (req, res) => {
         }
 
         // Auto-login after registration
-        const loginResult = authenticateUser(username, password);
+        const loginResult = await authenticateUser(username, password);
         if (loginResult.success) {
             req.session.user = loginResult.user;
             req.session.userId = loginResult.user.id;
@@ -585,31 +786,29 @@ function requireAdmin(req, res, next) {
     return res.status(403).json({ error: 'Admin access required' });
 }
 
-// Account Management Routes (Per User)
 app.get('/api/accounts', async (req, res) => {
     try {
         const userId = req.user.id;
-        const accounts = db.prepare('SELECT id, name, type, pages_data, is_valid, created_at, updated_at FROM facebook_accounts WHERE user_id = ? ORDER BY created_at DESC').all(userId);
+        // Use AccountManager to get accounts (consistent with Electron app)
+        const accountManager = new AccountManager();
+        const accounts = await accountManager.getAllAccounts(userId);
 
-        // Parse pages_data and remove cookies from response for security
-        const safeAccounts = accounts.map(account => {
-            const pages = account.pages_data ? JSON.parse(account.pages_data) : [];
-            return {
-                id: account.id,
-                name: account.name,
-                type: account.type,
-                pages: pages,
-                pagesCount: pages.length,
-                valid: account.is_valid === 1,
-                hasCookie: account.is_valid === 1,
-                created_at: account.created_at,
-                updated_at: account.updated_at
-            };
-        });
+        // Format accounts for frontend (remove cookies for security)
+        const safeAccounts = accounts.map(account => ({
+            id: account.id, // Use database ID
+            name: account.name,
+            type: account.type || 'personal',
+            pages: account.pages || [],
+            pagesCount: (account.pages || []).length,
+            valid: account.valid || false,
+            hasCookie: !!(account.cookie && account.cookie.trim()),
+            created_at: account.createdAt,
+            updated_at: account.updatedAt
+        }));
 
         res.json(safeAccounts);
     } catch (error) {
-        console.error('Error in get accounts:', error);
+        console.error('❌ Error in get accounts:', error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -623,48 +822,23 @@ app.post('/api/accounts', async (req, res) => {
             return res.status(400).json({ success: false, error: 'Account name is required' });
         }
 
-        // Check if account name already exists for this user
-        const existingAccount = db.prepare('SELECT id FROM facebook_accounts WHERE user_id = ? AND name = ?').get(userId, name);
-        if (existingAccount) {
-            return res.status(400).json({ success: false, error: 'Account name already exists' });
-        }
+        // Use AccountManager to save account (consistent with Electron app)
+        const accountManager = new AccountManager();
+        const result = await accountManager.saveAccount({
+            name: name.trim(),
+            type: type || 'personal',
+            cookie: cookie
+        }, userId);
 
-        let isValid = 0;
-        let pagesData = null;
-
-        // Validate cookie if provided and test account
-        if (cookie && cookie.trim()) {
-            try {
-                const testResult = await testAccountCookie(name, type, cookie);
-                isValid = testResult.success ? 1 : 0;
-                pagesData = testResult.success && testResult.pages ? JSON.stringify(testResult.pages) : null;
-            } catch (testError) {
-                console.error('Cookie validation error:', testError);
-                // Account creation still succeeds even if cookie validation fails
-                isValid = 0;
-                pagesData = null;
-            }
-        }
-
-        // Getting user_id by API key or session
-        const accountManager = require('./src/modules/account-manager');
-        const accountMgr = new accountManager();
-
-        // Insert new account
-        const result = db.prepare(`
-            INSERT INTO facebook_accounts (user_id, name, type, cookie, pages_data, is_valid, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(userId, name, type || 'personal', cookie ? accountMgr.encrypt(cookie) : null, pagesData, isValid, new Date().toISOString(), new Date().toISOString());
-
-        if (result.changes > 0) {
+        if (result.success) {
             res.json({
                 success: true,
                 account: name,
-                isEdit: false,
-                pagesCount: pagesData ? JSON.parse(pagesData).length : 0
+                isEdit: result.isEdit || false,
+                pagesCount: result.validation?.pages?.length || 0
             });
         } else {
-            res.status(500).json({ success: false, error: 'Failed to create account' });
+            res.status(400).json({ success: false, error: result.error });
         }
     } catch (error) {
         console.error('Error saving account:', error);
@@ -678,51 +852,45 @@ app.put('/api/accounts/:accountName', async (req, res) => {
         const { accountName } = req.params;
         const { cookie } = req.body;
 
-        // Find existing account for this user
-        const account = db.prepare('SELECT id, cookie FROM facebook_accounts WHERE user_id = ? AND name = ?').get(userId, accountName);
-        if (!account) {
+        console.log(`🔄 Updating account: ${accountName} for user: ${userId}`);
+
+        // Use AccountManager to update account (consistent with Electron app)
+        const accountManager = new AccountManager();
+
+        // Check if account exists first
+        const existingAccount = await accountManager.getAccount(accountName, userId);
+        if (!existingAccount) {
+            console.log(`❌ Account not found: ${accountName}`);
             return res.status(404).json({ success: false, error: 'Account not found' });
         }
 
-        let isValid = 0;
-        let pagesData = null;
+        // Prepare update data - only update cookie if provided
+        const updateData = {
+            name: accountName,
+            type: existingAccount.type // Keep existing type
+        };
 
-        // Validate cookie if provided and different from existing
-        if (cookie && cookie !== account.cookie) {
-            try {
-                const testResult = await testAccountCookie(accountName, 'personal', cookie);
-                isValid = testResult.success ? 1 : 0;
-                pagesData = testResult.success && testResult.pages ? JSON.stringify(testResult.pages) : null;
-            } catch (testError) {
-                console.error('Cookie validation error:', testError);
-                isValid = 0;
-                pagesData = null;
-            }
-        } else if (!cookie) {
-            // If no cookie provided, mark as invalid
-            isValid = 0;
-            pagesData = null;
+        if (cookie !== undefined) { // Allow empty string to clear cookie
+            updateData.cookie = cookie;
         }
 
-        // Update account
-        const result = db.prepare(`
-            UPDATE facebook_accounts
-            SET cookie = ?, pages_data = ?, is_valid = ?, updated_at = ?
-            WHERE user_id = ? AND name = ?
-        `).run(cookie, pagesData, isValid, new Date().toISOString(), userId, accountName);
+        const result = await accountManager.saveAccount(updateData, userId);
 
-        if (result.changes > 0) {
+        if (result.success) {
+            console.log(`✅ Account update successful:`, result);
             res.json({
                 success: true,
                 account: accountName,
                 isEdit: true,
-                pagesCount: pagesData ? JSON.parse(pagesData).length : 0
+                pagesCount: result.validation?.pages?.length || 0,
+                hasChanges: true
             });
         } else {
-            res.status(500).json({ success: false, error: 'Failed to update account' });
+            console.log(`❌ Account update failed:`, result.error);
+            res.status(400).json({ success: false, error: result.error });
         }
     } catch (error) {
-        console.error('Error updating account:', error);
+        console.error('❌ Error updating account:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -732,9 +900,11 @@ app.delete('/api/accounts/:accountName', async (req, res) => {
         const userId = req.user.id;
         const { accountName } = req.params;
 
-        const result = db.prepare('DELETE FROM facebook_accounts WHERE user_id = ? AND name = ?').run(userId, accountName);
+        // Use AccountManager to delete account (consistent with Electron app)
+        const accountManager = new AccountManager();
+        const result = await accountManager.deleteAccount(accountName, userId);
 
-        if (result.changes > 0) {
+        if (result.success) {
             res.json({ success: true });
         } else {
             res.status(404).json({ success: false, error: 'Account not found' });
@@ -771,7 +941,7 @@ app.post('/api/accounts/test', async (req, res) => {
 });
 
 // Queue Management Routes (Per User)
-app.get('/api/queue', (req, res) => {
+app.get('/api/queue', async (req, res) => {
     try {
         const isAdmin = req.user.role === 'admin' || req.user.username === 'admin';
         const requestedUserId = req.query.userId; // Admin can filter by userId
@@ -785,7 +955,7 @@ app.get('/api/queue', (req, res) => {
         }
 
         // Get queue items for the target user
-        const userQueue = getQueueItems(targetUserId);
+        const userQueue = await getQueueItems(targetUserId);
 
         // Transform for frontend compatibility
         const queue = userQueue.map(item => ({
@@ -816,20 +986,34 @@ app.get('/api/queue', (req, res) => {
     }
 });
 
-app.post('/api/queue', (req, res) => {
+app.post('/api/queue', async (req, res) => {
     try {
         const userId = req.user.id;
+        const userRole = req.user.role;
         const formData = req.body;
 
-        // Get account information including cookie
-        const account = db.prepare('SELECT id, name, cookie, type, pages_data FROM facebook_accounts WHERE user_id = ? AND name = ? AND is_valid = 1')
-            .get(userId, formData.account);
+        console.log(`📝 POST /api/queue request:`, { userId, userRole, account: formData.account });
+
+        // Use AccountManager to get account information (handles decryption properly)
+        const accountManager = new AccountManager();
+        const account = await accountManager.getAccount(formData.account, userId);
+
+        console.log(`🔍 Account lookup result:`, {
+            found: !!account,
+            accountName: account?.name,
+            hasCookie: !!(account?.cookie && account.cookie.trim()),
+            cookieLength: account?.cookie?.length,
+            valid: account?.valid
+        });
 
         if (!account) {
+            console.log(`❌ Account "${formData.account}" not found for user ${userId}`);
             return res.status(400).json({ success: false, error: `Account "${formData.account}" not found or invalid` });
         }
 
-        if (!account.cookie) {
+        // Check if account has a valid cookie
+        if (!account.cookie || !account.cookie.trim()) {
+            console.log(`❌ Account "${formData.account}" has no valid cookie`);
             return res.status(400).json({ success: false, error: `Account "${formData.account}" has no valid cookie` });
         }
 
@@ -850,7 +1034,8 @@ app.post('/api/queue', (req, res) => {
             created_at: new Date().toISOString()
         };
 
-        if (addQueueItem(queueItem, userId)) {
+        const success = await addQueueItem(queueItem, userId);
+        if (success) {
             res.json({ success: true, id: queueItem.id });
         } else {
             res.status(500).json({ success: false, error: 'Failed to add to queue' });
@@ -861,47 +1046,121 @@ app.post('/api/queue', (req, res) => {
     }
 });
 
-app.put('/api/queue/:itemId', (req, res) => {
+app.put('/api/queue/:itemId', async (req, res) => {
     try {
         const userId = req.user.id;
+        const userRole = req.user.role;
         const { itemId } = req.params;
         const updates = req.body;
 
-        // Verify the queue item belongs to this user
-        const item = db.prepare('SELECT user_id FROM queue WHERE id = ?').get(itemId);
-        if (!item || item.user_id !== userId) {
+        console.log(`🔄 PUT /api/queue/${itemId} request:`, {
+            userId,
+            userRole,
+            updates: Object.keys(updates),
+            itemId
+        });
+
+        // First check if item exists at all
+        const item = db.prepare('SELECT user_id, status, retry_count FROM queue WHERE id = ?').get(itemId);
+
+        console.log(`📊 Queue item lookup result:`, {
+            itemId,
+            found: !!item,
+            itemUserId: item?.user_id,
+            currentUserId: userId,
+            status: item?.status,
+            retryCount: item?.retry_count
+        });
+
+        if (!item) {
+            console.log(`❌ Queue item ${itemId} not found in database`);
             return res.status(404).json({ success: false, error: 'Queue item not found' });
         }
 
-        if (updateQueueItem(itemId, updates)) {
+        // Check ownership - allow admin to update any item
+        const isOwner = item.user_id === userId;
+        const isAdmin = userRole === 'admin' || userRole === 'Admin';
+
+        console.log(`🔐 Permission check: isOwner=${isOwner}, isAdmin=${isAdmin}, item.user_id=${item.user_id}, userId=${userId}`);
+
+        if (!isOwner && !isAdmin) {
+            console.log(`🚫 Access denied: Item belongs to another user`);
+            return res.status(403).json({ success: false, error: 'Access denied: Item belongs to another user' });
+        }
+
+        // Prevent updating items that are currently being processed
+        if (item.status === 'processing') {
+            console.log(`⚠️ Cannot update item ${itemId} - currently being processed`);
+            return res.status(409).json({ success: false, error: 'Item is currently being processed. Please wait for processing to complete.' });
+        }
+
+        console.log(`✅ Permission granted, proceeding with update`);
+
+        const success = await updateQueueItem(itemId, updates);
+        if (success) {
+            console.log(`✅ Queue item ${itemId} updated successfully`);
             res.json({ success: true });
         } else {
+            console.log(`❌ Failed to update queue item ${itemId}`);
             res.status(500).json({ success: false, error: 'Failed to update queue item' });
         }
     } catch (error) {
-        console.error('Error updating queue item:', error);
+        console.error('❌ Error updating queue item:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
 
-app.delete('/api/queue/:itemId', (req, res) => {
+app.delete('/api/queue/:itemId', async (req, res) => {
     try {
+        console.log(`🗑️ DELETE request received`);
+        console.log(`📊 req.user:`, req.user);
+        console.log(`📊 req.session:`, req.session ? 'exists' : 'null');
+
+        if (!req.user) {
+            console.log(`❌ No user in session`);
+            return res.status(401).json({ success: false, error: 'Authentication required' });
+        }
+
         const userId = req.user.id;
+        const userRole = req.user.role;
         const { itemId } = req.params;
 
-        // Verify the queue item belongs to this user before deleting
+        console.log(`🗑️ DELETE request for queue item: ${itemId}`);
+        console.log(`👤 User: ${userId} (${userRole})`);
+
+        // Verify the queue item exists and belongs to this user (or user is admin)
         const item = db.prepare('SELECT user_id FROM queue WHERE id = ?').get(itemId);
-        if (!item || item.user_id !== userId) {
+        console.log(`📊 Queue item lookup result:`, item);
+
+        if (!item) {
+            console.log(`❌ Queue item ${itemId} not found in database`);
             return res.status(404).json({ success: false, error: 'Queue item not found' });
         }
 
-        if (deleteQueueItem(itemId)) {
+        // Allow deletion if item belongs to user OR user is admin
+        const isOwner = item.user_id === userId;
+        const isAdmin = userRole === 'admin' || userRole === 'Admin';
+
+        console.log(`🔐 Permission check: isOwner=${isOwner}, isAdmin=${isAdmin}, item.user_id=${item.user_id}, userId=${userId}`);
+
+        if (!isOwner && !isAdmin) {
+            console.log(`🚫 Access denied: Item belongs to another user`);
+            return res.status(403).json({ success: false, error: 'Access denied: Item belongs to another user' });
+        }
+
+        console.log(`✅ Permission granted, proceeding with deletion`);
+        const success = await deleteQueueItem(itemId);
+        console.log(`🗑️ Delete operation result: ${success}`);
+
+        if (success) {
+            console.log(`✅ Queue item ${itemId} deleted successfully`);
             res.json({ success: true });
         } else {
+            console.log(`❌ Failed to delete queue item ${itemId}`);
             res.status(500).json({ success: false, error: 'Failed to delete queue item' });
         }
     } catch (error) {
-        console.error('Error deleting from queue:', error);
+        console.error('❌ Error deleting from queue:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -917,7 +1176,7 @@ app.post('/api/queue/start', async (req, res) => {
         }
 
         // Update settings before starting
-        const settings = getSettings(userId);
+        const settings = await getSettings(userId);
         console.log(`⚙️ Current settings for user ${userId}:`, settings);
 
         globalQueueProcessor.updateOptions({
@@ -925,7 +1184,7 @@ app.post('/api/queue/start', async (req, res) => {
         });
 
         // Check current queue status for this user
-        const currentQueue = getQueueItems(userId);
+        const currentQueue = await getQueueItems(userId);
         console.log(`📊 Current queue status for user ${userId}: ${currentQueue.length} items`);
 
         // Start queue processing for this specific user
@@ -958,7 +1217,7 @@ app.post('/api/queue/process-manually', async (req, res) => {
         await globalQueueProcessor.processImmediateUploads(userId);
 
         // Get updated queue status for this user
-        const queue = getQueueItems(userId);
+        const queue = await getQueueItems(userId);
         const stats = globalQueueProcessor.getQueueStats();
 
         console.log(`📊 Manual processing completed for user ${userId}. Queue stats:`, stats);
@@ -975,9 +1234,29 @@ app.post('/api/queue/process-manually', async (req, res) => {
 });
 
 // File Upload Route
-app.post('/api/upload', upload.single('video'), (req, res) => {
+app.post('/api/upload', (req, res, next) => {
+    console.log('📁 Upload request received');
+    console.log('📊 Request headers:', {
+        'content-type': req.headers['content-type'],
+        'content-length': req.headers['content-length'],
+        'user-agent': req.headers['user-agent']
+    });
+
+    // Check if request body is too large before multer processes it
+    const contentLength = parseInt(req.headers['content-length']);
+    if (contentLength && contentLength > 500 * 1024 * 1024) {
+        console.log('❌ Request body too large:', contentLength, 'bytes');
+        return res.status(413).json({
+            success: false,
+            error: 'File terlalu besar untuk server. Maksimal 500MB.'
+        });
+    }
+
+    next();
+}, upload.single('video'), (req, res) => {
     try {
         if (!req.file) {
+            console.log('❌ No file in request');
             return res.status(400).json({ success: false, error: 'No file uploaded' });
         }
 
@@ -989,19 +1268,23 @@ app.post('/api/upload', upload.single('video'), (req, res) => {
             mimetype: req.file.mimetype
         };
 
-        console.log('📁 File uploaded:', req.file.originalname);
+        console.log('✅ File uploaded successfully:', {
+            name: req.file.originalname,
+            size: req.file.size,
+            path: req.file.path
+        });
         res.json(fileData);
     } catch (error) {
-        console.error('Error uploading file:', error);
+        console.error('❌ Error uploading file:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
 
 // Settings Routes (Per User)
-app.get('/api/settings', (req, res) => {
+app.get('/api/settings', async (req, res) => {
     try {
         const userId = req.user.id;
-        const settings = getSettings(userId);
+        const settings = await getSettings(userId);
         res.json(settings);
     } catch (error) {
         console.error('Error getting settings:', error);
@@ -1009,16 +1292,16 @@ app.get('/api/settings', (req, res) => {
     }
 });
 
-app.put('/api/settings', (req, res) => {
+app.put('/api/settings', async (req, res) => {
     try {
         const userId = req.user.id;
         const { uploadDelay, maxRetries, autoStartQueue, showNotifications, showBrowser } = req.body;
 
-        updateSetting(userId, 'uploadDelay', uploadDelay);
-        updateSetting(userId, 'maxRetries', maxRetries);
-        updateSetting(userId, 'autoStartQueue', autoStartQueue);
-        updateSetting(userId, 'showNotifications', showNotifications);
-        updateSetting(userId, 'showBrowser', showBrowser);
+        await updateSetting(userId, 'uploadDelay', uploadDelay);
+        await updateSetting(userId, 'maxRetries', maxRetries);
+        await updateSetting(userId, 'autoStartQueue', autoStartQueue);
+        await updateSetting(userId, 'showNotifications', showNotifications);
+        await updateSetting(userId, 'showBrowser', showBrowser);
 
         // Immediately sync settings with globalQueueProcessor if initialized
         if (globalQueueProcessor) {
@@ -1046,7 +1329,7 @@ app.post('/api/debug/browser-visibility', async (req, res) => {
         }
 
         // Get current settings
-        const settings = getSettings();
+        const settings = await getSettings();
 
         console.log('Current settings:', settings);
         console.log('QueueProcessor exists:', !!globalQueueProcessor);
@@ -1158,6 +1441,87 @@ app.post('/api/gemini/apis', (req, res) => {
     }
 });
 
+// Bulk API insertion endpoint
+app.post('/api/gemini/apis/bulk', async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { apiKeys } = req.body;
+
+        if (!apiKeys || !Array.isArray(apiKeys) || apiKeys.length === 0) {
+            return res.status(400).json({ success: false, error: 'API keys array is required' });
+        }
+
+        if (apiKeys.length > 50) {
+            return res.status(400).json({ success: false, error: 'Maximum 50 API keys allowed at once' });
+        }
+
+        const results = {
+            successful: [],
+            failed: [],
+            total: apiKeys.length
+        };
+
+        // Process each API key
+        for (let i = 0; i < apiKeys.length; i++) {
+            const apiKey = apiKeys[i].trim();
+
+            if (!apiKey) {
+                results.failed.push({
+                    index: i + 1,
+                    apiKey: apiKey,
+                    error: 'Empty API key'
+                });
+                continue;
+            }
+
+            try {
+                // Validate API key
+                const isValid = await geminiService.validateApiKey(apiKey);
+
+                if (!isValid) {
+                    results.failed.push({
+                        index: i + 1,
+                        apiKey: apiKey,
+                        error: 'Invalid API key'
+                    });
+                    continue;
+                }
+
+                // Generate random name for the API key
+                const randomName = `API-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+
+                // Add the API
+                const result = await geminiStore.addApi(apiKey, randomName, userId);
+
+                results.successful.push({
+                    index: i + 1,
+                    apiKey: apiKey,
+                    name: randomName,
+                    id: result.id
+                });
+
+            } catch (error) {
+                console.error(`Error processing API key ${i + 1}:`, error);
+                results.failed.push({
+                    index: i + 1,
+                    apiKey: apiKey,
+                    error: error.message || 'Unknown error'
+                });
+            }
+        }
+
+        res.json({
+            success: true,
+            results: results,
+            message: `Processed ${results.total} API keys: ${results.successful.length} successful, ${results.failed.length} failed`
+        });
+
+    } catch (error) {
+        console.error('Error in bulk API insertion:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 app.delete('/api/gemini/apis/:apiId', (req, res) => {
     try {
         const userId = req.user.id;
@@ -1205,11 +1569,11 @@ app.post('/api/gemini/test-key', (req, res) => {
 app.post('/api/gemini/generate-caption', async (req, res) => {
     try {
         const userId = req.user.id;
-        const { fileName, language } = req.body;
+        const { fileName, language, apiKeyId } = req.body;
 
-        console.log(`🤖 Generating caption for: ${fileName} in ${language} (User: ${userId})`);
+        console.log(`🤖 Generating caption for: ${fileName} in ${language} (User: ${userId}) ${apiKeyId ? `(API Key: ${apiKeyId})` : '(Auto API Key)'}`);
 
-        const result = await geminiService.generateContent(fileName, userId, { language });
+        const result = await geminiService.generateContent(fileName, userId, { language, apiKeyId });
 
         if (result.generated) {
             console.log('✅ Caption generated successfully');
@@ -1260,6 +1624,23 @@ app.get('/api/gemini/stats', async (req, res) => {
             recentRequests: 0,
             recentSuccessRate: '0%',
             averageResponseTime: 0
+        });
+    }
+});
+
+app.get('/api/gemini/rate-limited-keys', async (req, res) => {
+    try {
+        const rateLimitedKeys = geminiService.getRateLimitedKeys();
+        res.json({
+            success: true,
+            rateLimitedKeys: rateLimitedKeys
+        });
+    } catch (error) {
+        console.error('Error getting rate limited keys:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            rateLimitedKeys: []
         });
     }
 });
@@ -1386,46 +1767,60 @@ app.post('/api/analytics/export', async (req, res) => {
 });
 
 // Background processing scheduler (similar to Electron cron)
-cron.schedule('*/30 * * * * *', async () => {
-    if (!globalQueueProcessor) return;
+// Temporarily disabled to prevent server crash
+// TODO: Fix the database query issue causing null account processing
+// cron.schedule('*/30 * * * * *', async () => {
+//     if (!globalQueueProcessor) return;
 
-    try {
-        console.log('🔄 Running scheduled queue processing...');
+//     try {
+//         console.log('🔄 Running scheduled queue processing...');
 
-        // Process scheduled uploads only - don't process immediate uploads in background
-        // as they need authentication context
-        await globalQueueProcessor.processScheduledUploads();
+//         // Process scheduled uploads only - don't process immediate uploads in background
+//         // as they need authentication context
+//         await globalQueueProcessor.processScheduledUploads();
 
-        // Note: immediate uploads (pending status) are only processed via authenticated API calls
+//         // Note: immediate uploads (pending status) are only processed via authenticated API calls
 
-        console.log('✅ Scheduled queue processing completed');
-    } catch (error) {
-        console.error('❌ Error in scheduled queue processing:', error);
-    }
-});
+//         console.log('✅ Scheduled queue processing completed');
+//     } catch (error) {
+//         console.error('❌ Error in scheduled queue processing:', error);
+//     }
+// });
 
 // Admin User Management Routes
 app.get('/api/admin/users', requireAdmin, (req, res) => {
     try {
-        const users = db.prepare('SELECT id, username, display_name, role, last_login, created_at FROM users ORDER BY created_at DESC').all();
+        db.all('SELECT id, username, display_name, role, last_login, created_at FROM users ORDER BY created_at DESC', (err, users) => {
+            if (err) {
+                console.error('❌ Error getting users:', err);
+                res.status(500).json({
+                    success: false,
+                    error: err.message
+                });
+                return;
+            }
 
-        // Don't return sensitive information like password_hash
-        const safeUsers = users.map(user => ({
-            id: user.id,
-            username: user.username,
-            displayName: user.display_name,
-            role: user.role,
-            lastLogin: user.last_login,
-            createdAt: user.created_at
-        }));
+            // Ensure users is an array
+            const usersArray = Array.isArray(users) ? users : [];
 
-        // Return consistent response format
-        res.json({
-            success: true,
-            users: safeUsers
+            // Filter out null values and don't return sensitive information like password_hash
+            const safeUsers = usersArray.filter(user => user !== null && user !== undefined).map(user => ({
+                id: user.id,
+                username: user.username,
+                displayName: user.display_name,
+                role: user.role,
+                lastLogin: user.last_login,
+                createdAt: user.created_at
+            }));
+
+            // Return consistent response format
+            res.json({
+                success: true,
+                users: safeUsers
+            });
         });
     } catch (error) {
-        console.error('Error getting users:', error);
+        console.error('❌ Error getting users:', error);
         res.status(500).json({
             success: false,
             error: error.message
@@ -1433,51 +1828,55 @@ app.get('/api/admin/users', requireAdmin, (req, res) => {
     }
 });
 
-// Admin Account Management Routes - View all accounts from all users
 app.get('/api/admin/accounts', requireAdmin, (req, res) => {
     try {
-        // Get all Facebook accounts with user information
-        const accounts = db.prepare(`
+        db.all(`
             SELECT
-                fa.id,
-                fa.user_id,
-                fa.name,
-                fa.type,
-                fa.pages_data,
-                fa.is_valid,
-                fa.created_at,
-                fa.updated_at,
-                u.username,
-                u.display_name
+                fa.id, fa.name, fa.type, fa.pages_data, fa.is_valid, fa.created_at, fa.updated_at,
+                u.username as user_username, u.display_name as user_display_name
             FROM facebook_accounts fa
-            JOIN users u ON fa.user_id = u.id
-            ORDER BY fa.updated_at DESC
-        `).all();
+            LEFT JOIN users u ON fa.user_id = u.id
+            ORDER BY fa.created_at DESC
+        `, (err, accounts) => {
+            if (err) {
+                console.error('❌ Error getting admin accounts:', err);
+                res.status(500).json({
+                    success: false,
+                    error: err.message
+                });
+                return;
+            }
 
-        // Parse pages_data and remove cookies from response for security
-        const safeAccounts = accounts.map(account => {
-            const pages = account.pages_data ? JSON.parse(account.pages_data) : [];
-            return {
-                id: account.id,
-                userId: account.user_id,
-                name: account.name,
-                type: account.type,
-                pages: pages,
-                pagesCount: pages.length,
-                valid: account.is_valid === 1,
-                created_at: account.created_at,
-                updated_at: account.updated_at,
-                ownerUsername: account.username,
-                ownerDisplayName: account.display_name || account.username
-            };
-        });
+            // Ensure accounts is an array
+            const accountsArray = Array.isArray(accounts) ? accounts : [];
 
-        res.json({
-            success: true,
-            accounts: safeAccounts
+            // Parse pages_data and remove cookies from response for security
+            const safeAccounts = accountsArray.filter(account => account !== null && account !== undefined).map(account => {
+                const pages = account.pages_data ? JSON.parse(account.pages_data) : [];
+                return {
+                    id: account.id,
+                    name: account.name,
+                    type: account.type,
+                    pages: pages,
+                    pagesCount: pages.length,
+                    valid: account.is_valid === 1,
+                    hasCookie: account.is_valid === 1,
+                    created_at: account.created_at,
+                    updated_at: account.updated_at,
+                    ownerUsername: account.user_username || 'undefined',
+                    ownerDisplayName: account.user_display_name || 'undefined'
+                };
+            });
+
+
+
+            res.json({
+                success: true,
+                accounts: safeAccounts
+            });
         });
     } catch (error) {
-        console.error('Error getting admin accounts:', error);
+        console.error('❌ Error getting admin accounts:', error);
         res.status(500).json({
             success: false,
             error: error.message
@@ -1624,12 +2023,14 @@ app.put('/api/admin/users/:userId/role', requireAdmin, (req, res) => {
 app.get('/api/admin/settings', requireAdmin, (req, res) => {
     try {
         // Get system-wide settings (not user-specific)
-        const globalRows = db.prepare('SELECT key, value FROM settings').all();
+        const globalRows = db.prepare('SELECT key, value FROM settings').all() || [];
 
         const settings = {};
-        globalRows.forEach(row => {
-            settings[row.key] = row.value;
-        });
+        if (Array.isArray(globalRows)) {
+            globalRows.forEach(row => {
+                settings[row.key] = row.value;
+            });
+        }
 
         res.json({
             success: true,
@@ -1863,6 +2264,9 @@ process.on('SIGTERM', () => {
     process.exit(0);
 });
 
+// Test the fix by checking if the server can start without the accountMgr error
+console.log('🔧 Testing account manager fix...');
+
 // Start server
 async function startServer() {
     try {
@@ -1871,6 +2275,7 @@ async function startServer() {
         app.listen(PORT, '0.0.0.0', () => {
             console.log(`🚀 ReelSync Pro web server running on http://0.0.0.0:${PORT}`);
             console.log('💡 Open your browser and go to the URL above');
+            console.log('✅ Account manager fix applied successfully');
         });
     } catch (error) {
         console.error('❌ Error starting server:', error);

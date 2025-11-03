@@ -346,9 +346,14 @@
                 <div class="tab-pane" id="gemini">
                     <div class="tab-header">
                         <h2>AI Caption Generator</h2>
-                        <button class="btn-primary" id="add-gemini-api-btn">
-                            <i class="fas fa-plus"></i> Tambah API Key
-                        </button>
+                        <div class="gemini-header-actions">
+                            <button class="btn-secondary" id="bulk-add-gemini-api-btn">
+                                <i class="fas fa-plus-circle"></i> Bulk Add API Keys
+                            </button>
+                            <button class="btn-primary" id="add-gemini-api-btn">
+                                <i class="fas fa-plus"></i> Tambah API Key
+                            </button>
+                        </div>
                     </div>
 
                     <div class="gemini-stats">
@@ -821,6 +826,42 @@
                     </button>
                     <button type="submit" class="btn-primary" id="save-gemini-btn">
                         <i class="fas fa-save"></i> Simpan API Key
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal for Bulk Gemini API Management -->
+    <div class="modal" id="bulk-gemini-modal">
+        <div class="modal-content large-modal">
+            <div class="modal-header">
+                <h3>Bulk Add Gemini API Keys</h3>
+                <button class="modal-close" id="bulk-gemini-modal-close">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <form class="modal-form" id="bulk-gemini-form">
+                <div class="form-group">
+                    <label for="bulk-gemini-api-keys">API Keys Gemini (satu per baris):</label>
+                    <textarea id="bulk-gemini-api-keys" rows="10" required placeholder="Masukkan API key Gemini satu per baris...&#10;API_KEY_1&#10;API_KEY_2&#10;API_KEY_3"></textarea>
+                    <small class="form-help">
+                        Masukkan satu API key per baris. Maksimal 50 API keys sekaligus.<br>
+                        Dapatkan API key dari: <a href="https://makersuite.google.com/app/apikey" target="_blank">Google AI Studio</a>
+                    </small>
+                </div>
+                <div class="bulk-results" id="bulk-gemini-results" style="display: none;">
+                    <h4>Processing Results:</h4>
+                    <div class="bulk-results-content" id="bulk-gemini-results-content">
+                        <!-- Results will be populated here -->
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn-secondary" id="cancel-bulk-gemini-btn">
+                        <i class="fas fa-times"></i> Batal
+                    </button>
+                    <button type="submit" class="btn-primary" id="save-bulk-gemini-btn">
+                        <i class="fas fa-save"></i> Simpan API Keys
                     </button>
                 </div>
             </form>
