@@ -459,8 +459,15 @@ class FacebookAutomation {
             // Check if profile loaded successfully
             const isLoggedIn = await this.checkLoginStatus(page);
             if (!isLoggedIn) {
+                // Take screenshot before throwing error
+                await page.screenshot({ path: 'debug-auth-failed-profile-not-accessible.png', width: 1024, height: 768 });
+                console.log('📸 Screenshot: debug-auth-failed-profile-not-accessible.png');
                 throw new Error('Authentication failed - profile page not accessible');
             }
+
+            // Take screenshot after successful login verification
+            await page.screenshot({ path: 'debug-auth-success-profile-accessible.png', width: 1024, height: 768 });
+            console.log('📸 Screenshot: debug-auth-success-profile-accessible.png');
 // Handle switch profile popup if present
 console.log('Checking for switch profile popup...');
 const switchSuccess = await this.handleSwitchProfilePopup(page, uploadData.pageId);
@@ -630,6 +637,9 @@ try {
             }
 
             if (!fileInput) {
+                // Take screenshot before throwing error
+                await page.screenshot({ path: 'debug-error-file-input-not-found.png', width: 1024, height: 768 });
+                console.log('📸 Screenshot: debug-error-file-input-not-found.png');
                 throw new Error('Video file input not found');
             }
 
@@ -1258,6 +1268,9 @@ if (switchSuccess) {
 
             if (!processingComplete) {
                 console.log('⚠️ Video processing check failed, proceeding anyway...');
+                // Take screenshot when processing check fails
+                await page.screenshot({ path: 'debug-error-video-processing-failed.png', width: 1024, height: 768 });
+                console.log('📸 Screenshot: debug-error-video-processing-failed.png');
             } else {
                 console.log('✅ Video processing complete, modal ready for caption input');
             }
@@ -1619,9 +1632,13 @@ if (switchSuccess) {
                         await page.screenshot({ path: 'debug-post-after-kirim-click.png' , width: 1024, height: 768 });
                         console.log('📸 Screenshot: debug-post-after-kirim-click.png');
 
-                        // HANDLE "Permudah untuk menghubungi Anda" POPUP
+                        // HANDLE "Permudah untuk menghubungi Anda" POPUP WITH ENHANCED VISUAL INDICATORS
                         console.log('🔍 Checking for "Permudah untuk menghubungi Anda" popup...');
                         await new Promise(resolve => setTimeout(resolve, 2000)); // Wait for popup to appear
+
+                        // First, take a screenshot to capture the popup if it exists
+                        await page.screenshot({ path: 'debug-checking-for-popup.png', width: 1024, height: 768 });
+                        console.log('📸 Screenshot: debug-checking-for-popup.png');
 
                         const popupHandled = await page.evaluate(() => {
                             const allText = document.body.textContent || '';
@@ -1629,11 +1646,13 @@ if (switchSuccess) {
                             // Check if popup with "Permudah untuk menghubungi Anda" is present
                             if (allText.includes('Permudah untuk menghubungi Anda') ||
                                 allText.includes('Permudah untuk menghubungi') ||
+                                allText.includes('menghubungi Anda') ||
+                                allText.includes('Permudah untuk menghubungi') ||
                                 allText.includes('menghubungi Anda')) {
 
                                 console.log('📱 Found "Permudah untuk menghubungi Anda" popup');
 
-                                // Find and click "lain kali" (next time) button
+                                // Find and get coordinates of "lain kali" (next time) button
                                 const allButtons = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"], span[role="button"]'));
 
                                 const lainKaliBtn = allButtons.find(btn => {
@@ -1644,13 +1663,23 @@ if (switchSuccess) {
                                            text.includes('LAIN KALI') ||
                                            ariaLabel.includes('lain kali') ||
                                            text.includes('nanti') ||
-                                           text.includes('Nanti');
+                                           text.includes('Nanti') ||
+                                           text.includes('lain kali') ||
+                                           text.includes('next time') ||
+                                           text.includes('Next time');
                                 });
 
                                 if (lainKaliBtn) {
-                                    console.log('✅ Found "lain kali" button, clicking...');
-                                    lainKaliBtn.click();
-                                    return { handled: true, action: 'clicked_lain_kali' };
+                                    console.log('✅ Found "lain kali" button, getting coordinates...');
+                                    const rect = lainKaliBtn.getBoundingClientRect();
+                                    const x = rect.left + rect.width / 2;
+                                    const y = rect.top + rect.height / 2;
+                                    return {
+                                        handled: true,
+                                        action: 'clicked_lain_kali',
+                                        coords: { x, y },
+                                        text: lainKaliBtn.textContent?.trim()
+                                    };
                                 } else {
                                     console.log('⚠️ "lain kali" button not found');
                                     return { handled: false, action: 'popup_found_no_button' };
@@ -1660,13 +1689,638 @@ if (switchSuccess) {
                             return { handled: false, action: 'no_popup' };
                         });
 
-                        if (popupHandled.handled) {
-                            console.log(`🎯 Popup handled: ${popupHandled.action}`);
-                            await page.screenshot({ path: 'debug-post-after-popup-handling.png' , width: 1024, height: 768 });
-                            console.log('📸 Screenshot: debug-post-after-popup-handling.png');
-                            await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for popup to close
+                        if (popupHandled.handled && popupHandled.coords) {
+                            console.log(`🎯 Found "lain kali" button at coordinates: (${Math.round(popupHandled.coords.x)}, ${Math.round(popupHandled.coords.y)})`);
+
+                            // Add colored visual indicator for "lain kali" button
+                            console.log('🟠 Adding colored visual indicator for "LAIN KALI" button...');
+                            await page.evaluate((x, y) => {
+                                const indicator = document.createElement('div');
+                                indicator.id = 'lain-kali-indicator';
+                                indicator.style.position = 'fixed';
+                                indicator.style.left = (x - 40) + 'px';
+                                indicator.style.top = (y - 40) + 'px';
+                                indicator.style.width = '80px';
+                                indicator.style.height = '80px';
+                                indicator.style.border = '6px solid #FFA500'; // Orange border
+                                indicator.style.borderRadius = '50%';
+                                indicator.style.backgroundColor = 'rgba(255, 165, 0, 0.8)'; // Orange background
+                                indicator.style.zIndex = '999999';
+                                indicator.style.pointerEvents = 'none';
+                                indicator.style.boxShadow = '0 0 40px rgba(255, 165, 0, 1), 0 0 80px rgba(255, 165, 0, 0.6)';
+                                indicator.textContent = 'LAIN KALI';
+                                indicator.style.color = 'white';
+                                indicator.style.fontSize = '14px';
+                                indicator.style.display = 'flex';
+                                indicator.style.alignItems = 'center';
+                                indicator.style.justifyContent = 'center';
+                                indicator.style.fontWeight = 'bold';
+                                indicator.style.textShadow = '2px 2px 4px black';
+                                document.body.appendChild(indicator);
+                                console.log('🟠 LAIN KALI indicator added to DOM');
+
+                                // Add pulsating animation
+                                let scale = 1;
+                                const pulse = setInterval(() => {
+                                    scale = scale === 1 ? 1.2 : 1;
+                                    indicator.style.transform = `scale(${scale})`;
+                                }, 300);
+
+                                // Remove indicator after 4 seconds
+                                setTimeout(() => {
+                                    clearInterval(pulse);
+                                    if (indicator.parentNode) {
+                                        indicator.parentNode.removeChild(indicator);
+                                    }
+                                }, 4000);
+                            }, popupHandled.coords.x, popupHandled.coords.y);
+
+                            // Wait for visual indicator to be visible
+                            console.log('⏳ Waiting 3 seconds for visual indicator...');
+                            await new Promise(resolve => setTimeout(resolve, 3000));
+
+                            // Take screenshot with indicator
+                            await page.screenshot({ path: 'debug-popup-with-lain-kali-indicator.png', width: 1024, height: 768 });
+                            console.log('📸 Screenshot with indicator: debug-popup-with-lain-kali-indicator.png');
+
+                            // Now click the "lain kali" button
+                            console.log(`🖱️ Clicking "LAIN KALI" button at coordinates (${Math.round(popupHandled.coords.x)}, ${Math.round(popupHandled.coords.y)})...`);
+
+                            const clickResult = await page.evaluate(() => {
+                                const allButtons = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"], span[role="button"]'));
+
+                                const lainKaliBtn = allButtons.find(btn => {
+                                    const text = btn.textContent?.trim() || '';
+                                    const ariaLabel = btn.getAttribute('aria-label') || '';
+                                    return text.includes('lain kali') ||
+                                           text.includes('Lain kali') ||
+                                           text.includes('LAIN KALI') ||
+                                           ariaLabel.includes('lain kali') ||
+                                           text.includes('nanti') ||
+                                           text.includes('Nanti') ||
+                                           text.includes('next time') ||
+                                           text.includes('Next time');
+                                });
+
+                                if (lainKaliBtn) {
+                                    lainKaliBtn.click();
+                                    return { clicked: true, text: lainKaliBtn.textContent?.trim() };
+                                }
+
+                                return { clicked: false };
+                            });
+
+                            if (clickResult.clicked) {
+                                console.log(`✅ SUCCESS! Clicked "lain kali" button: "${clickResult.text}"`);
+
+                                // Add "CLICKED" indicator to show the button was successfully clicked
+                                await page.evaluate((x, y) => {
+                                    const clickedIndicator = document.createElement('div');
+                                    clickedIndicator.id = 'lain-kali-clicked-indicator';
+                                    clickedIndicator.style.position = 'fixed';
+                                    clickedIndicator.style.left = (x - 50) + 'px';
+                                    clickedIndicator.style.top = (y - 50) + 'px';
+                                    clickedIndicator.style.width = '100px';
+                                    clickedIndicator.style.height = '100px';
+                                    clickedIndicator.style.border = '8px solid #00FF00'; // Green border for success
+                                    clickedIndicator.style.borderRadius = '50%';
+                                    clickedIndicator.style.backgroundColor = 'rgba(0, 255, 0, 0.9)'; // Green background
+                                    clickedIndicator.style.zIndex = '1000000'; // Higher z-index
+                                    clickedIndicator.style.pointerEvents = 'none';
+                                    clickedIndicator.style.boxShadow = '0 0 60px rgba(0, 255, 0, 1), 0 0 120px rgba(0, 255, 0, 0.8)';
+                                    clickedIndicator.textContent = 'LAIN KALI CLICKED ✓';
+                                    clickedIndicator.style.color = 'white';
+                                    clickedIndicator.style.fontSize = '14px';
+                                    clickedIndicator.style.display = 'flex';
+                                    clickedIndicator.style.alignItems = 'center';
+                                    clickedIndicator.style.justifyContent = 'center';
+                                    clickedIndicator.style.fontWeight = 'bold';
+                                    clickedIndicator.style.textShadow = '2px 2px 4px black';
+                                    clickedIndicator.style.textAlign = 'center';
+                                    clickedIndicator.style.lineHeight = '1.2';
+                                    document.body.appendChild(clickedIndicator);
+                                    console.log('✅ LAIN KALI CLICKED indicator added to DOM');
+
+                                    // Flash animation to show success
+                                    let opacity = 1;
+                                    const flash = setInterval(() => {
+                                        opacity = opacity === 1 ? 0.3 : 1;
+                                        clickedIndicator.style.opacity = opacity;
+                                    }, 150);
+
+                                    // Remove after 3 seconds
+                                    setTimeout(() => {
+                                        clearInterval(flash);
+                                        if (clickedIndicator.parentNode) {
+                                            clickedIndicator.parentNode.removeChild(clickedIndicator);
+                                        }
+                                    }, 3000);
+                                }, popupHandled.coords.x, popupHandled.coords.y);
+
+                                await page.screenshot({ path: 'debug-popup-after-lain-kali-click.png', width: 1024, height: 768 });
+                                console.log('📸 Screenshot after click: debug-popup-after-lain-kali-click.png');
+                                await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for popup to close
+                            } else {
+                                console.log('❌ FAILED: Could not click "lain kali" button');
+                            }
+
+                        } else if (popupHandled.handled && !popupHandled.coords) {
+                            console.log('⚠️ Popup found but "lain kali" button coordinates not available');
+                            await page.screenshot({ path: 'debug-popup-found-no-button-coords.png', width: 1024, height: 768 });
+                            console.log('📸 Screenshot: debug-popup-found-no-button-coords.png');
                         } else {
                             console.log('ℹ️ No "Permudah untuk menghubungi Anda" popup found');
+                        }
+
+                        // HANDLE "Ngobrol Langsung Dengan pelanggan" POPUP - SIMPLIFIED AND MORE RELIABLE
+                        console.log('🔍 Checking for "Ngobrol Langsung Dengan pelanggan" popup...');
+
+                        // Multiple attempts to detect and handle popup
+                        let chatPopupHandled = false;
+                        const maxPopupAttempts = 10; // More attempts
+
+                        for (let popupAttempt = 1; popupAttempt <= maxPopupAttempts && !chatPopupHandled; popupAttempt++) {
+                            console.log(`🔄 Chat popup detection attempt ${popupAttempt}/${maxPopupAttempts}...`);
+
+                            // First, check if popup exists and try to click "lain kali" button directly
+                            const popupResult = await page.evaluate(() => {
+                                const allText = document.body.textContent || '';
+
+                                // Check for popup text patterns
+                                const popupPatterns = [
+                                    'Ngobrol Langsung Dengan pelanggan',
+                                    'Ngobrol Langsung',
+                                    'Dengan pelanggan',
+                                    'Chat langsung',
+                                    'Direct chat',
+                                    'ngobrol langsung',
+                                    'pelanggan',
+                                    'Direct message',
+                                    'Message customers',
+                                    'Hubungi pelanggan',
+                                    'Contact customers'
+                                ];
+
+                                let popupFound = false;
+                                for (const pattern of popupPatterns) {
+                                    if (allText.toLowerCase().includes(pattern.toLowerCase())) {
+                                        popupFound = true;
+                                        console.log(`💬 Found chat popup pattern: "${pattern}"`);
+                                        break;
+                                    }
+                                }
+
+                                if (popupFound) {
+                                    console.log('💬 Chat popup detected, looking for "lain kali" button...');
+
+                                    // Look for "lain kali" button with comprehensive selectors
+                                    const allButtons = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"], span[role="button"], a[role="button"], input[type="button"], input[type="submit"]'));
+
+                                    // PRIORITY ORDER: Look for exact "lain kali" first, then variations
+                                    const lainKaliPatterns = [
+                                        'lain kali', 'Lain kali', 'LAIN KALI', // Exact matches first
+                                        'nanti', 'Nanti', 'NOT NOW',
+                                        'next time', 'Next time', 'NEXT TIME',
+                                        'not now', 'Not now', 'NOT NOW',
+                                        'skip', 'Skip', 'SKIP',
+                                        'lewati', 'Lewati', 'LEWATI'
+                                    ];
+
+                                    let foundButton = null;
+                                    let foundText = '';
+
+                                    // Find the best matching button
+                                    for (const pattern of lainKaliPatterns) {
+                                        foundButton = allButtons.find(btn => {
+                                            const text = (btn.textContent?.trim() || '').toLowerCase();
+                                            const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+                                            const value = (btn.getAttribute('value') || '').toLowerCase();
+
+                                            return text.includes(pattern.toLowerCase()) ||
+                                                   ariaLabel.includes(pattern.toLowerCase()) ||
+                                                   value.includes(pattern.toLowerCase());
+                                        });
+
+                                        if (foundButton) {
+                                            foundText = foundButton.textContent?.trim() || foundButton.getAttribute('aria-label') || foundButton.getAttribute('value') || 'unknown';
+                                            console.log(`✅ Found button with pattern "${pattern}": "${foundText}"`);
+                                            break;
+                                        }
+                                    }
+
+                                    if (foundButton) {
+                                        console.log(`🎯 Clicking "lain kali" button: "${foundText}"`);
+
+                                        // Try multiple click methods
+                                        try {
+                                            // Method 1: Direct click
+                                            foundButton.click();
+                                            console.log('✅ Direct click successful');
+                                            return { success: true, method: 'direct_click', text: foundText };
+                                        } catch (directError) {
+                                            console.log('⚠️ Direct click failed, trying dispatchEvent...');
+                                            try {
+                                                // Method 2: Dispatch events
+                                                foundButton.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                                                foundButton.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                                                foundButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                                                console.log('✅ Dispatch event click successful');
+                                                return { success: true, method: 'dispatch_event', text: foundText };
+                                            } catch (dispatchError) {
+                                                console.log('⚠️ Dispatch event failed, trying scroll and click...');
+                                                try {
+                                                    // Method 3: Scroll into view and click
+                                                    foundButton.scrollIntoView({ behavior: 'instant', block: 'center' });
+                                                    setTimeout(() => foundButton.click(), 100);
+                                                    console.log('✅ Scroll and click successful');
+                                                    return { success: true, method: 'scroll_click', text: foundText };
+                                                } catch (scrollError) {
+                                                    console.log('❌ All click methods failed');
+                                                    return { success: false, error: 'all_methods_failed', text: foundText };
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        console.log('⚠️ No "lain kali" button found in popup');
+                                        return { success: false, error: 'button_not_found' };
+                                    }
+                                }
+
+                                return { success: false, error: 'popup_not_found' };
+                            });
+
+                            if (popupResult.success) {
+                                console.log(`✅ SUCCESS! Chat popup handled using ${popupResult.method}: "${popupResult.text}"`);
+                                chatPopupHandled = true;
+
+                                // Take success screenshot
+                                await page.screenshot({ path: `debug-chat-popup-clicked-success-${popupAttempt}.png`, width: 1024, height: 768 });
+                                console.log(`📸 Screenshot: debug-chat-popup-clicked-success-${popupAttempt}.png`);
+
+                                // Wait for popup to close
+                                await new Promise(resolve => setTimeout(resolve, 2000));
+                                break;
+                            } else {
+                                console.log(`⚠️ Chat popup attempt ${popupAttempt} failed: ${popupResult.error}`);
+
+                                if (popupResult.error === 'popup_not_found') {
+                                    // No popup found, continue to next attempt
+                                    await new Promise(resolve => setTimeout(resolve, 1000));
+                                } else if (popupResult.error === 'button_not_found') {
+                                    // Popup found but no button, take screenshot for debugging
+                                    await page.screenshot({ path: `debug-chat-popup-no-button-${popupAttempt}.png`, width: 1024, height: 768 });
+                                    console.log(`📸 Screenshot: debug-chat-popup-no-button-${popupAttempt}.png`);
+                                    await new Promise(resolve => setTimeout(resolve, 1000));
+                                } else {
+                                    // Other error, take screenshot and continue
+                                    await page.screenshot({ path: `debug-chat-popup-error-${popupAttempt}.png`, width: 1024, height: 768 });
+                                    console.log(`📸 Screenshot: debug-chat-popup-error-${popupAttempt}.png`);
+                                    await new Promise(resolve => setTimeout(resolve, 1000));
+                                }
+                            }
+                        }
+
+                        if (chatPopupHandled) {
+                            console.log('🎉 Chat popup successfully handled!');
+                        } else {
+                            console.log('ℹ️ No chat popup found or all handling attempts failed');
+                        }
+
+                        // HANDLE "Menyelenggarakan Acara" POPUP - ORGANIZE EVENT POPUP (MOVED TO RUN BEFORE SUCCESS CHECK)
+                        console.log('🔍 Checking for "Menyelenggarakan Acara" popup BEFORE success check...');
+
+                        // Multiple attempts to detect event popup (it might appear with delay)
+                        let eventPopupHandled = { handled: false, action: 'no_event_popup' };
+                        const maxEventAttempts = 8; // Increased attempts
+
+                        for (let eventAttempt = 1; eventAttempt <= maxEventAttempts; eventAttempt++) {
+                            console.log(`🔄 Event popup detection attempt ${eventAttempt}/${maxEventAttempts}...`);
+
+                            eventPopupHandled = await page.evaluate(() => {
+                                const allText = document.body.textContent || '';
+                                const allHTML = document.body.innerHTML || '';
+
+                                // ENHANCED DETECTION: Check for various event popup text patterns
+                                const eventPopupPatterns = [
+                                    'Menyelenggarakan Acara',
+                                    'menyelenggarakan acara',
+                                    'Menyelenggarakan acara',
+                                    'Organize Event',
+                                    'organize event',
+                                    'Create Event',
+                                    'create event',
+                                    'Buat Acara',
+                                    'buat acara',
+                                    'Acara',
+                                    'Event',
+                                    'ingin mengadakan acara', // Additional pattern
+                                    'mengadakan acara' // Additional pattern
+                                ];
+
+                                let eventPopupFound = false;
+                                for (const pattern of eventPopupPatterns) {
+                                    if (allText.toLowerCase().includes(pattern.toLowerCase())) {
+                                        eventPopupFound = true;
+                                        console.log(`🎪 Found event popup pattern: "${pattern}"`);
+                                        break;
+                                    }
+                                }
+
+                                // Also check for modal/dialog elements that might contain the event popup
+                                const modalElements = document.querySelectorAll('[role="dialog"], [role="modal"], .modal, .popup, .overlay, [data-testid*="modal"], [data-testid*="dialog"]');
+                                modalElements.forEach((modal, index) => {
+                                    const modalText = modal.textContent || '';
+                                    for (const pattern of eventPopupPatterns) {
+                                        if (modalText.toLowerCase().includes(pattern.toLowerCase())) {
+                                            eventPopupFound = true;
+                                            console.log(`🎪 Found event popup in modal ${index}: "${pattern}"`);
+                                            break;
+                                        }
+                                    }
+                                });
+
+                                if (eventPopupFound) {
+                                    console.log('🎪 Event popup detected, looking for "Terbitkan Postingan Asli" button...');
+
+                                    // ENHANCED BUTTON DETECTION: Look for "Terbitkan Postingan Asli" button with more selectors
+                                    const allButtons = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"], span[role="button"], a[role="button"], input[type="button"], input[type="submit"], [data-testid*="button"], [aria-label*="Terbitkan"], [aria-label*="Publish"]'));
+
+                                    console.log(`🔍 Found ${allButtons.length} clickable elements to search for "Terbitkan Postingan Asli" button`);
+
+                                    // Log all button texts for debugging (limit to avoid spam)
+                                    allButtons.slice(0, 20).forEach((btn, index) => {
+                                        const text = btn.textContent?.trim() || '';
+                                        const ariaLabel = btn.getAttribute('aria-label') || '';
+                                        const value = btn.getAttribute('value') || '';
+                                        if (text || ariaLabel || value) {
+                                            console.log(`Button ${index}: text="${text}" aria-label="${ariaLabel}" value="${value}"`);
+                                        }
+                                    });
+
+                                    // ENHANCED BUTTON TEXT MATCHING for "Terbitkan Postingan Asli" - MORE PATTERNS
+                                    const terbitkanPatterns = [
+                                        'Terbitkan Postingan Asli', 'terbitkan postingan asli', 'TERBITKAN POSTINGAN ASLI',
+                                        'Terbitkan postingan asli', 'Terbitkan Postingan asli',
+                                        'Publish Original Post', 'publish original post', 'PUBLISH ORIGINAL POST',
+                                        'Post Original', 'post original', 'POST ORIGINAL',
+                                        'Postingan Asli', 'postingan asli', 'POSTINGAN ASLI',
+                                        'Original Post', 'original post', 'ORIGINAL POST',
+                                        'Terbitkan', 'terbitkan', 'TERBITKAN', // Shorter patterns
+                                        'Publish', 'publish', 'PUBLISH' // English fallback
+                                    ];
+
+                                    const terbitkanBtn = allButtons.find(btn => {
+                                        const text = (btn.textContent?.trim() || '').toLowerCase();
+                                        const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+                                        const value = (btn.getAttribute('value') || '').toLowerCase();
+
+                                        // Check if any pattern matches
+                                        const matches = terbitkanPatterns.some(pattern =>
+                                            text.includes(pattern.toLowerCase()) ||
+                                            ariaLabel.includes(pattern.toLowerCase()) ||
+                                            value.includes(pattern.toLowerCase())
+                                        );
+
+                                        if (matches) {
+                                            console.log(`✅ Button match found: text="${btn.textContent?.trim()}" aria-label="${ariaLabel}"`);
+                                        }
+
+                                        return matches;
+                                    });
+
+                                    if (terbitkanBtn) {
+                                        console.log('✅ Found "Terbitkan Postingan Asli" button for event popup, getting coordinates...');
+                                        const rect = terbitkanBtn.getBoundingClientRect();
+                                        const x = rect.left + rect.width / 2;
+                                        const y = rect.top + rect.height / 2;
+                                        const buttonText = terbitkanBtn.textContent?.trim() || terbitkanBtn.getAttribute('aria-label') || terbitkanBtn.getAttribute('value') || 'unknown';
+
+                                        console.log(`📍 Button coordinates: (${Math.round(x)}, ${Math.round(y)}), text: "${buttonText}"`);
+
+                                        return {
+                                            handled: true,
+                                            action: 'clicked_terbitkan_postingan_asli',
+                                            coords: { x, y },
+                                            text: buttonText,
+                                            attempt: eventAttempt
+                                        };
+                                    } else {
+                                        console.log('⚠️ "Terbitkan Postingan Asli" button not found for event popup');
+                                        return {
+                                            handled: false,
+                                            action: 'event_popup_found_no_button',
+                                            attempt: eventAttempt
+                                        };
+                                    }
+                                }
+
+                                return {
+                                    handled: false,
+                                    action: 'no_event_popup',
+                                    attempt: eventAttempt
+                                };
+                            });
+
+                            if (eventPopupHandled.handled) {
+                                console.log(`✅ Event popup detected and handled on attempt ${eventAttempt}`);
+                                break;
+                            }
+
+                            // Wait before next attempt
+                            if (eventAttempt < maxEventAttempts) {
+                                console.log(`⏳ Waiting 1 second before next event popup detection attempt...`);
+                                await new Promise(resolve => setTimeout(resolve, 1000));
+                            }
+                        }
+
+                        if (eventPopupHandled.handled && eventPopupHandled.coords) {
+                            console.log(`🎯 Found "Terbitkan Postingan Asli" button for event popup at coordinates: (${Math.round(eventPopupHandled.coords.x)}, ${Math.round(eventPopupHandled.coords.y)})`);
+
+                            // Add colored visual indicator for event popup "Terbitkan Postingan Asli" button - using RED color for visibility
+                            console.log('🔴 Adding RED visual indicator for EVENT POPUP "TERBITKAN POSTINGAN ASLI" button...');
+                            await page.evaluate((x, y) => {
+                                const indicator = document.createElement('div');
+                                indicator.id = 'event-terbitkan-indicator';
+                                indicator.style.position = 'fixed';
+                                indicator.style.left = (x - 60) + 'px';
+                                indicator.style.top = (y - 60) + 'px';
+                                indicator.style.width = '120px';
+                                indicator.style.height = '120px';
+                                indicator.style.border = '10px solid #FF0000'; // RED border for high visibility
+                                indicator.style.borderRadius = '50%';
+                                indicator.style.backgroundColor = 'rgba(255, 0, 0, 0.9)'; // RED background
+                                indicator.style.zIndex = '999999';
+                                indicator.style.pointerEvents = 'none';
+                                indicator.style.boxShadow = '0 0 80px rgba(255, 0, 0, 1), 0 0 160px rgba(255, 0, 0, 0.8)';
+                                indicator.textContent = 'TERBITKAN POSTINGAN ASLI';
+                                indicator.style.color = 'white';
+                                indicator.style.fontSize = '12px';
+                                indicator.style.display = 'flex';
+                                indicator.style.alignItems = 'center';
+                                indicator.style.justifyContent = 'center';
+                                indicator.style.fontWeight = 'bold';
+                                indicator.style.textShadow = '2px 2px 4px black';
+                                indicator.style.textAlign = 'center';
+                                indicator.style.lineHeight = '1.1';
+                                document.body.appendChild(indicator);
+                                console.log('🔴 EVENT TERBITKAN RED indicator added to DOM');
+
+                                // Add pulsating animation
+                                let scale = 1;
+                                const pulse = setInterval(() => {
+                                    scale = scale === 1 ? 1.5 : 1;
+                                    indicator.style.transform = `scale(${scale})`;
+                                }, 300);
+
+                                // Remove indicator after 8 seconds
+                                setTimeout(() => {
+                                    clearInterval(pulse);
+                                    if (indicator.parentNode) {
+                                        indicator.parentNode.removeChild(indicator);
+                                    }
+                                }, 8000);
+                            }, eventPopupHandled.coords.x, eventPopupHandled.coords.y);
+
+                            // Wait for visual indicator to be visible
+                            console.log('⏳ Waiting 6 seconds for RED event popup visual indicator...');
+                            await new Promise(resolve => setTimeout(resolve, 6000));
+
+                            // Take screenshot with indicator
+                            await page.screenshot({ path: 'debug-event-popup-with-RED-terbitkan-indicator.png', width: 1024, height: 768 });
+                            console.log('📸 Screenshot with RED event popup indicator: debug-event-popup-with-RED-terbitkan-indicator.png');
+
+                            // Now click the "Terbitkan Postingan Asli" button for event popup using ENHANCED CLICKING LOGIC
+                            console.log(`🖱️ Clicking EVENT POPUP "TERBITKAN POSTINGAN ASLI" button at coordinates (${Math.round(eventPopupHandled.coords.x)}, ${Math.round(eventPopupHandled.coords.y)})...`);
+
+                            // ENHANCED CLICKING: Try multiple approaches with more attempts
+                            let eventClickResult = { clicked: false };
+
+                            // First try: Direct element click with more robust selector
+                            try {
+                                eventClickResult = await page.evaluate(() => {
+                                    // ENHANCED BUTTON SEARCH: Use the same patterns as detection but more comprehensive
+                                    const terbitkanPatterns = [
+                                        'Terbitkan Postingan Asli', 'terbitkan postingan asli', 'TERBITKAN POSTINGAN ASLI',
+                                        'Terbitkan postingan asli', 'Terbitkan Postingan asli',
+                                        'Publish Original Post', 'publish original post', 'PUBLISH ORIGINAL POST',
+                                        'Post Original', 'post original', 'POST ORIGINAL',
+                                        'Postingan Asli', 'postingan asli', 'POSTINGAN ASLI',
+                                        'Original Post', 'original post', 'ORIGINAL POST',
+                                        'Terbitkan', 'terbitkan', 'TERBITKAN', // Shorter patterns
+                                        'Publish', 'publish', 'PUBLISH' // English fallback
+                                    ];
+
+                                    // More comprehensive selector
+                                    const allButtons = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"], span[role="button"], a[role="button"], input[type="button"], input[type="submit"], [data-testid*="button"], [aria-label*="Terbitkan"], [aria-label*="Publish"], [data-visualcompletion*="button"]'));
+
+                                    const terbitkanBtn = allButtons.find(btn => {
+                                        const text = (btn.textContent?.trim() || '').toLowerCase();
+                                        const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+                                        const value = (btn.getAttribute('value') || '').toLowerCase();
+
+                                        return terbitkanPatterns.some(pattern =>
+                                            text.includes(pattern.toLowerCase()) ||
+                                            ariaLabel.includes(pattern.toLowerCase()) ||
+                                            value.includes(pattern.toLowerCase())
+                                        );
+                                    });
+
+                                    if (terbitkanBtn) {
+                                        // Try to scroll element into view first
+                                        terbitkanBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+                                        // Wait a bit for scroll
+                                        setTimeout(() => {
+                                            terbitkanBtn.click();
+                                        }, 500);
+
+                                        return { clicked: true, text: terbitkanBtn.textContent?.trim() || terbitkanBtn.getAttribute('aria-label') || terbitkanBtn.getAttribute('value') || 'unknown', method: 'element_with_scroll' };
+                                    }
+
+                                    return { clicked: false, method: 'element' };
+                                });
+
+                                // Wait for element click to take effect
+                                await new Promise(resolve => setTimeout(resolve, 1000));
+
+                                if (!eventClickResult.clicked) {
+                                    console.log('⚠️ Element click failed, trying coordinate click...');
+                                    // Second try: Coordinate click (fallback)
+                                    await page.mouse.click(eventPopupHandled.coords.x, eventPopupHandled.coords.y);
+                                    eventClickResult = { clicked: true, text: 'coordinate click', method: 'coordinate' };
+                                }
+                            } catch (clickError) {
+                                console.log('⚠️ Both click methods failed, trying coordinate click as last resort...');
+                                try {
+                                    await page.mouse.click(eventPopupHandled.coords.x, eventPopupHandled.coords.y);
+                                    eventClickResult = { clicked: true, text: 'coordinate click fallback', method: 'coordinate_fallback' };
+                                } catch (coordError) {
+                                    console.log('❌ All click methods failed');
+                                    eventClickResult = { clicked: false, error: coordError.message };
+                                }
+                            }
+
+                            if (eventClickResult.clicked) {
+                                console.log(`✅ SUCCESS! Clicked event popup "Terbitkan Postingan Asli" button using ${eventClickResult.method}: "${eventClickResult.text}"`);
+
+                                // Add "CLICKED" indicator with YELLOW color to show the button was successfully clicked for event popup
+                                await page.evaluate((x, y) => {
+                                    const clickedIndicator = document.createElement('div');
+                                    clickedIndicator.id = 'event-terbitkan-clicked-indicator';
+                                    clickedIndicator.style.position = 'fixed';
+                                    clickedIndicator.style.left = (x - 70) + 'px';
+                                    clickedIndicator.style.top = (y - 70) + 'px';
+                                    clickedIndicator.style.width = '140px';
+                                    clickedIndicator.style.height = '140px';
+                                    clickedIndicator.style.border = '12px solid #FFFF00'; // YELLOW border for success
+                                    clickedIndicator.style.borderRadius = '50%';
+                                    clickedIndicator.style.backgroundColor = 'rgba(255, 255, 0, 0.95)'; // YELLOW background
+                                    clickedIndicator.style.zIndex = '1000000'; // Higher z-index
+                                    clickedIndicator.style.pointerEvents = 'none';
+                                    clickedIndicator.style.boxShadow = '0 0 100px rgba(255, 255, 0, 1), 0 0 200px rgba(255, 255, 0, 0.9)';
+                                    clickedIndicator.textContent = 'TERBITKAN POSTINGAN ASLI CLICKED ✓';
+                                    clickedIndicator.style.color = 'black';
+                                    clickedIndicator.style.fontSize = '14px';
+                                    clickedIndicator.style.display = 'flex';
+                                    clickedIndicator.style.alignItems = 'center';
+                                    clickedIndicator.style.justifyContent = 'center';
+                                    clickedIndicator.style.fontWeight = 'bold';
+                                    clickedIndicator.style.textShadow = '1px 1px 2px white';
+                                    clickedIndicator.style.textAlign = 'center';
+                                    clickedIndicator.style.lineHeight = '1.1';
+                                    document.body.appendChild(clickedIndicator);
+                                    console.log('✅ EVENT TERBITKAN YELLOW CLICKED indicator added to DOM');
+
+                                    // Flash animation to show success
+                                    let opacity = 1;
+                                    const flash = setInterval(() => {
+                                        opacity = opacity === 1 ? 0.4 : 1;
+                                        clickedIndicator.style.opacity = opacity;
+                                    }, 200);
+
+                                    // Remove after 5 seconds
+                                    setTimeout(() => {
+                                        clearInterval(flash);
+                                        if (clickedIndicator.parentNode) {
+                                            clickedIndicator.parentNode.removeChild(clickedIndicator);
+                                        }
+                                    }, 5000);
+                                }, eventPopupHandled.coords.x, eventPopupHandled.coords.y);
+
+                                await page.screenshot({ path: 'debug-event-popup-after-YELLOW-terbitkan-click.png', width: 1024, height: 768 });
+                                console.log('📸 Screenshot after YELLOW event popup click: debug-event-popup-after-YELLOW-terbitkan-click.png');
+                                await new Promise(resolve => setTimeout(resolve, 1500)); // Wait for popup to close
+                            } else {
+                                console.log('❌ FAILED: Could not click event popup "Terbitkan Postingan Asli" button');
+                                console.log('Error details:', eventClickResult.error);
+                            }
+
+                        } else if (eventPopupHandled.handled && !eventPopupHandled.coords) {
+                            console.log('⚠️ Event popup found but "Terbitkan Postingan Asli" button coordinates not available');
+                            await page.screenshot({ path: 'debug-event-popup-found-no-button-coords.png', width: 1024, height: 768 });
+                            console.log('📸 Screenshot: debug-event-popup-found-no-button-coords.png');
+                        } else {
+                            console.log('ℹ️ No "Menyelenggarakan Acara" popup found');
                         }
 
                         // GET SUCCESS MESSAGE LIKE REELS - CHECK SHORT TEXT FRAGMENTS
@@ -1694,23 +2348,6 @@ if (switchSuccess) {
                                     }
                                 }
 
-                                // CHECK FOR LOADING/POSTING INDICATORS AS SUCCESS
-                                // If we see "memposting" or similar loading text, it means posting is in progress = SUCCESS
-                                const loadingTexts = [
-                                    'memposting',
-                                    'posting',
-                                    'sedang memposting',
-                                    'posting...',
-                                    'uploading',
-                                    'sedang mengupload'
-                                ];
-
-                                for (const loadingText of loadingTexts) {
-                                    if (allText.toLowerCase().includes(loadingText.toLowerCase())) {
-                                        return { found: true, message: `Loading: ${loadingText}`, type: 'loading' };
-                                    }
-                                }
-
                                 return { found: false };
                             });
 
@@ -1720,6 +2357,9 @@ if (switchSuccess) {
                                 console.log(`🔄 Waiting for success message... (attempt ${attempts}/${maxAttempts})`);
                             } else {
                                 console.log(`🎉 SUCCESS DETECTED! Type: ${successMessage.type}, Message: "${successMessage.message}"`);
+                                // Take screenshot when success message is detected
+                                await page.screenshot({ path: 'debug-postingan-anda-sedang-diproses.png', width: 1024, height: 768 });
+                                console.log('📸 Screenshot: debug-postingan-anda-sedang-diproses.png');
                             }
                         }
 
@@ -1739,6 +2379,9 @@ if (switchSuccess) {
                             };
                         } else {
                             console.log('⚠️ Success message not found within timeout');
+                            // Take screenshot when success message is not found
+                            await page.screenshot({ path: 'debug-error-success-message-not-found.png', width: 1024, height: 768 });
+                            console.log('📸 Screenshot: debug-error-success-message-not-found.png');
 
                             const uploadUrl = page ? page.url() : 'unknown';
 

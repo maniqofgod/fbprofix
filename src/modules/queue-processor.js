@@ -313,11 +313,14 @@ class QueueProcessor {
                     });
 
                     // Convert database column names to camelCase for compatibility
-                    const processedRows = rows.map(row => {
+                    const processedRows = rows.map(async row => {
                         const key = `${row.account_name}-${row.page_id}`;
                         const lastUpload = cooldownMap.get(key);
                         const timeSinceLastUpload = now - lastUpload;
-                        const cooldownMs = settings.uploadDelay || 30000; // 30 seconds default
+
+                        // Get user-specific settings for cooldown calculation
+                        const userSettings = await this.getSettings(row.user_id);
+                        const cooldownMs = userSettings.uploadDelay || 30000; // 30 seconds default
 
                         let cooldownRemaining = 0;
                         if (timeSinceLastUpload < cooldownMs && (row.status === 'pending' || row.status === 'scheduled')) {
@@ -351,7 +354,10 @@ class QueueProcessor {
                         };
                     });
 
-                    resolve(processedRows);
+                    // Wait for all async operations to complete
+                    const resolvedRows = await Promise.all(processedRows);
+
+                    resolve(resolvedRows);
                 });
             } catch (error) {
                 console.error('Error getting queue:', error);
@@ -521,7 +527,7 @@ class QueueProcessor {
                 console.log(`🎬 Processing item: ${item.id} - ${item.type} upload`);
                 await this.processUpload(item);
 
-                // Delay antar upload sesuai pengaturan
+                // Delay antar upload sesuai pengaturan - use global settings for inter-upload delay
                 const settings = await this.getSettings();
                 console.log(`⏰ Waiting ${settings.uploadDelay}ms before next upload...`);
                 await this.delay(settings.uploadDelay);
@@ -730,7 +736,7 @@ class QueueProcessor {
             // Update attempts
             const currentItem = await this.getQueueItem(queueItem.id);
             const attempts = (currentItem.attempts || 0) + 1;
-            const settings = await this.getSettings();
+            const settings = await this.getSettings(queueItem.userId);
             const maxRetries = settings.maxRetries || 3;
 
             if (attempts < maxRetries) {
@@ -1017,14 +1023,72 @@ class QueueProcessor {
     }
 
     /**
-     * Ambil pengaturan aplikasi
+     * Ambil pengaturan aplikasi untuk user tertentu
      */
-    getSettings() {
+    getSettings(userId = null) {
+        return new Promise((resolve) => {
+            try {
+                // If userId is provided, try to get user-specific settings first
+                if (userId) {
+                    this.db.all('SELECT key, value FROM user_settings WHERE user_id = ?', [userId], (err, userRows) => {
+                        if (err) {
+                            console.error('Error getting user settings:', err);
+                            // Fall back to global settings
+                            this.getGlobalSettings().then(resolve);
+                            return;
+                        }
+
+                        if (userRows && userRows.length > 0) {
+                            // Parse user-specific settings
+                            const settings = {};
+                            userRows.forEach(row => {
+                                try {
+                                    settings[row.key] = JSON.parse(row.value);
+                                } catch (parseError) {
+                                    console.error(`Error parsing user setting ${row.key}:`, parseError);
+                                    settings[row.key] = row.value; // Fallback to raw value
+                                }
+                            });
+
+                            resolve({
+                                uploadDelay: parseInt(settings.uploadDelay) || 30000,
+                                maxRetries: parseInt(settings.maxRetries) || 3,
+                                autoStartQueue: settings.autoStartQueue === 'true' || settings.autoStartQueue === true,
+                                showNotifications: settings.showNotifications === 'true' || settings.showNotifications === true,
+                                showBrowser: settings.showBrowser === 'true' || settings.showBrowser === true
+                            });
+                            return;
+                        }
+
+                        // No user-specific settings, fall back to global
+                        this.getGlobalSettings().then(resolve);
+                    });
+                } else {
+                    // No userId provided, get global settings
+                    this.getGlobalSettings().then(resolve);
+                }
+            } catch (error) {
+                console.error('Error getting settings:', error);
+                resolve({
+                    uploadDelay: 30000,
+                    maxRetries: 3,
+                    autoStartQueue: false,
+                    showNotifications: true,
+                    showBrowser: false
+                });
+            }
+        });
+    }
+
+    /**
+     * Ambil pengaturan global (fallback)
+     */
+    getGlobalSettings() {
         return new Promise((resolve) => {
             try {
                 this.db.all('SELECT key, value FROM settings', (err, rows) => {
                     if (err) {
-                        console.error('Error getting settings:', err);
+                        console.error('Error getting global settings:', err);
                         resolve({
                             uploadDelay: 30000,
                             maxRetries: 3,
@@ -1040,7 +1104,7 @@ class QueueProcessor {
                         try {
                             settings[row.key] = JSON.parse(row.value);
                         } catch (parseError) {
-                            console.error(`Error parsing setting ${row.key}:`, parseError);
+                            console.error(`Error parsing global setting ${row.key}:`, parseError);
                             settings[row.key] = row.value; // Fallback to raw value
                         }
                     });
@@ -1054,7 +1118,7 @@ class QueueProcessor {
                     });
                 });
             } catch (error) {
-                console.error('Error getting settings:', error);
+                console.error('Error getting global settings:', error);
                 resolve({
                     uploadDelay: 30000,
                     maxRetries: 3,

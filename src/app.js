@@ -1989,20 +1989,31 @@ function updateSettingsDisplay() {
     if (elements.showNotifications) {
         elements.showNotifications.checked = appState.settings.showNotifications;
     }
-    if (elements.showBrowser) {
-        elements.showBrowser.checked = appState.settings.showBrowser;
-    }
+    // showBrowser is only available in admin panel, not in regular user settings
+    // if (elements.showBrowser) {
+    //     elements.showBrowser.checked = appState.settings.showBrowser;
+    // }
 }
 
 async function saveSettings(e) {
     e.preventDefault();
 
+    // Check if required elements exist
+    if (!elements.uploadDelay || !elements.maxRetries || !elements.autoStartQueue || !elements.showNotifications) {
+        console.error('Settings form elements not found');
+        showToast('Error: Form elements not loaded properly', 'error');
+        return;
+    }
+
+    // Get values with fallbacks to prevent undefined errors
+    const uploadDelayValue = elements.uploadDelay.value || '30';
+    const maxRetriesValue = elements.maxRetries.value || '3';
+
     const newSettings = {
-        uploadDelay: elements.uploadDelay.value * 1000, // Convert to milliseconds
-        maxRetries: parseInt(elements.maxRetries.value),
-        autoStartQueue: elements.autoStartQueue.checked,
-        showNotifications: elements.showNotifications.checked,
-        showBrowser: elements.showBrowser.checked
+        uploadDelay: parseInt(uploadDelayValue) * 1000, // Convert to milliseconds
+        maxRetries: parseInt(maxRetriesValue),
+        autoStartQueue: elements.autoStartQueue.checked || false,
+        showNotifications: elements.showNotifications.checked || false
     };
 
     try {
