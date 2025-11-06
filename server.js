@@ -513,37 +513,64 @@ async function testAccountCookie(name, type, cookie) {
 
 // User Authentication Helper Functions
 function registerUser(username, password, displayName, role = 'user') {
-    try {
-        // Check if user already exists
-        const existingUser = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
-        if (existingUser) {
-            return { success: false, error: 'Username already exists' };
+    return new Promise((resolve) => {
+        try {
+            // Check if user already exists (case-insensitive)
+            // Use callback-based approach like other parts of the code
+            db.all('SELECT id, username FROM users', (err, allUsers) => {
+                if (err) {
+                    console.error('Database error getting users:', err);
+                    resolve({ success: false, error: 'Database error' });
+                    return;
+                }
+
+                console.log(`DEBUG: Total users in database: ${allUsers ? allUsers.length : 'undefined'}`);
+                console.log(`DEBUG: Attempting to create user: "${username}"`);
+                if (allUsers && Array.isArray(allUsers)) {
+                    allUsers.forEach((user, index) => {
+                        console.log(`DEBUG: User ${index + 1} - ID: ${user.id}, Username: "${user.username}", Type: ${typeof user.username}`);
+                    });
+                }
+
+                // Check for existing username (case-insensitive)
+                const existingUser = allUsers && Array.isArray(allUsers) ?
+                    allUsers.find(user => {
+                        const match = user.username && user.username.toLowerCase() === username.toLowerCase();
+                        if (match) {
+                            console.log(`DEBUG: Found matching user:`, user);
+                        }
+                        return match;
+                    }) :
+                    null;
+
+                if (existingUser) {
+                    console.log(`User registration failed: username "${username}" already exists (found user: ${existingUser.username})`);
+                    resolve({ success: false, error: 'Username already exists' });
+                    return;
+                }
+
+                console.log(`DEBUG: Username "${username}" validation passed`);
+
+                // Hash password
+                const saltRounds = 10;
+                const hashedPassword = bcrypt.hashSync(password, saltRounds);
+
+                // Insert new user
+                const userId = uuidv4();
+                const insertStmt = db.prepare(`
+                    INSERT INTO users (id, username, password_hash, display_name, role, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                `);
+
+                insertStmt.run(userId, username, hashedPassword, displayName || username, role, new Date().toISOString());
+
+                resolve({ success: true, userId });
+            });
+        } catch (error) {
+            console.error('Error registering user:', error);
+            resolve({ success: false, error: error.message });
         }
-
-        // Check if this is the first user - make them admin
-        const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get();
-        if (userCount.count === 0) {
-            role = 'admin';
-        }
-
-        // Hash password
-        const saltRounds = 10;
-        const hashedPassword = bcrypt.hashSync(password, saltRounds);
-
-        // Insert new user
-        const userId = uuidv4();
-        const stmt = db.prepare(`
-            INSERT INTO users (id, username, password_hash, display_name, role, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        `);
-
-        stmt.run(userId, username, hashedPassword, displayName || username, role, new Date().toISOString());
-
-        return { success: true, userId, role };
-    } catch (error) {
-        console.error('Error registering user:', error);
-        return { success: false, error: error.message };
-    }
+    });
 }
 
 function changeUserPassword(userId, currentPassword, newPassword) {
@@ -709,7 +736,7 @@ app.post('/auth/register', async (req, res) => {
             return res.status(400).json({ success: false, error: 'Password must be at least 6 characters long' });
         }
 
-        const result = registerUser(username, password, displayName);
+        const result = await registerUser(username, password, displayName);
 
         if (!result.success) {
             return res.status(400).json({ success: false, error: result.error });
@@ -1933,7 +1960,7 @@ function deleteUser(userId) {
     }
 }
 
-app.post('/api/admin/users', requireAdmin, (req, res) => {
+app.post('/api/admin/users', requireAdmin, async (req, res) => {
     try {
         const { username, password, displayName, role = 'user' } = req.body;
 
@@ -1949,7 +1976,7 @@ app.post('/api/admin/users', requireAdmin, (req, res) => {
             return res.status(400).json({ success: false, error: 'Invalid role. Must be "user" or "admin"' });
         }
 
-        const result = registerUser(username, password, displayName, role);
+        const result = await registerUser(username, password, displayName, role);
 
         if (!result.success) {
             return res.status(400).json({ success: false, error: result.error });
