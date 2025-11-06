@@ -2573,7 +2573,7 @@ body {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     gap: 15px;
-    max-height: 800px;
+    max-height: 2000px;
     overflow-y: auto;
     padding-right: 8px;
 }

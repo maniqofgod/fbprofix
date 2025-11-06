@@ -322,8 +322,16 @@ function setupEventListeners() {
     elements.pageSelect.addEventListener('change', updateSendButtonState);
     elements.videoFile.addEventListener('input', updateSendButtonState);
     elements.bulkFiles.addEventListener('input', updateSendButtonState);
-    elements.bulkInterval.addEventListener('change', updateSendButtonState);
-    elements.bulkStartTime.addEventListener('input', updateSendButtonState);
+    // Note: bulkInterval and bulkStartTime changes don't affect button state - they're just configuration options
+
+    // Add additional listeners for bulk upload mode changes
+    const uploadModeRadios = document.querySelectorAll('input[name="upload-mode"]');
+    uploadModeRadios.forEach(radio => {
+        radio.addEventListener('change', () => {
+            // Small delay to ensure DOM updates are complete
+            setTimeout(updateSendButtonState, 50);
+        });
+    });
     elements.uploadForm.addEventListener('submit', addToQueue);
     elements.addToQueueBtn.addEventListener('click', addToQueue);
     if (elements.bulkGenerateCaptionsBtn) {
@@ -1619,26 +1627,38 @@ function updateSendButtonState(isLoading = false) {
     const hasAccount = elements.accountSelect.value;
     const hasPage = elements.pageSelect.value;
 
-    let isValid = true;
+    let isValid = false;
 
     if (isBulkMode) {
-        // Bulk mode validation
+        // Bulk mode validation - require account, page, and at least one uploaded file
         const uploadedFiles = elements.bulkFilesList._uploadedFiles || [];
-        isValid = hasAccount && hasPage && uploadedFiles.length > 0;
+        const hasFiles = uploadedFiles.length > 0;
+
+        // Ensure bulk files list element exists and has the uploaded files data
+        const bulkFilesListExists = elements.bulkFilesList && elements.bulkFilesList._uploadedFiles;
+        const filesCount = bulkFilesListExists ? elements.bulkFilesList._uploadedFiles.length : 0;
+
+        isValid = hasAccount && hasPage && hasFiles;
+
         console.log('Bulk Button State Debug:', {
             isBulkMode,
             hasAccount,
             hasPage,
-            filesCount: uploadedFiles.length
+            hasFiles,
+            filesCount,
+            bulkFilesListExists,
+            uploadedFilesLength: uploadedFiles.length,
+            isValid
         });
     } else {
-        // Single mode validation - less strict
-        isValid = hasAccount && hasPage; // Always enable for single mode
+        // Single mode validation - require account and page only
+        isValid = hasAccount && hasPage;
         console.log('Single Button State Debug:', {
             isBulkMode,
             hasAccount,
             hasPage,
-            videoFile: elements.videoFile.value
+            videoFile: elements.videoFile ? elements.videoFile.value : 'N/A',
+            isValid
         });
     }
 
@@ -3973,6 +3993,38 @@ async function handleSaveUser(e) {
     if (!isEdit && password.length < 6) {
         showToast('Password minimal 6 karakter', 'error');
         return;
+    }
+
+    // Check if username already exists - always fetch fresh data from server
+    console.log('Validating username uniqueness...');
+    try {
+        const usersResponse = await fetch(`${API_BASE}/api/admin/users`);
+        const usersResult = await usersResponse.json();
+        if (usersResult.success) {
+            const allUsers = usersResult.users || [];
+            console.log('Loaded users for validation:', allUsers.map(u => ({ id: u.id, username: u.username })));
+
+            // Check for existing username (case-insensitive)
+            const existingUser = allUsers.find(u =>
+                u.username.toLowerCase() === username.toLowerCase() &&
+                (!isEdit || u.id !== userId)
+            );
+
+            if (existingUser) {
+                console.log('Username validation failed - existing user:', existingUser);
+                showToast(`Username "${username}" sudah digunakan. Silakan pilih username lain.`, 'error');
+                elements.userUsername?.focus();
+                return;
+            }
+
+            console.log('Username validation passed');
+        } else {
+            console.error('Failed to load users for validation:', usersResult.error);
+            // Continue with submission if we can't validate - let server handle it
+        }
+    } catch (error) {
+        console.error('Error loading admin data for validation:', error);
+        // Continue with submission if we can't validate - let server handle it
     }
 
     const userData = {

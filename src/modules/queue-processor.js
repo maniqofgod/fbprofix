@@ -32,7 +32,17 @@ class QueueProcessor {
      */
     initializeDatabase() {
         try {
-            this.db = new sqlite3.Database(this.dbPath);
+            // Configure SQLite for better concurrency
+            this.db = new sqlite3.Database(this.dbPath, sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
+                if (err) {
+                    console.error('❌ Error opening database:', err);
+                    return;
+                }
+                console.log('📊 QueueProcessor database opened successfully');
+            });
+
+            // Configure database for better concurrency
+            this.db.configure('busyTimeout', 5000); // Wait up to 5 seconds for database to be available
 
             // Ensure queue table exists with all columns
             this.db.run(`
@@ -98,10 +108,10 @@ class QueueProcessor {
     }
 
     /**
-     * Tambahkan item ke antrian
+     * Tambahkan item ke antrian dengan retry logic
      */
     async addToQueue(queueItem, userId = null) {
-        try {
+        return this.withDatabaseRetry(async () => {
             // Generate ID unik
             queueItem.id = this.generateId();
             queueItem.status = 'pending';
@@ -151,13 +161,7 @@ class QueueProcessor {
                 id: queueItem.id,
                 message: 'Item berhasil ditambahkan ke antrian'
             };
-        } catch (error) {
-            console.error('Error adding to queue:', error);
-            return {
-                success: false,
-                error: error.message
-            };
-        }
+        }, 'addToQueue');
     }
 
     /**
@@ -195,10 +199,10 @@ class QueueProcessor {
     }
 
     /**
-     * Update status item di antrian
+     * Update status item di antrian dengan retry logic
      */
     async updateQueueItem(itemId, updates) {
-        try {
+        return this.withDatabaseRetry(async () => {
             // Check if item exists
             const existing = await this.getQueueItem(itemId);
             if (!existing) {
@@ -275,13 +279,7 @@ class QueueProcessor {
                 success: false,
                 error: 'Gagal mengupdate item'
             };
-        } catch (error) {
-            console.error('Error updating queue item:', error);
-            return {
-                success: false,
-                error: error.message
-            };
-        }
+        }, 'updateQueueItem');
     }
 
     /**
@@ -1491,6 +1489,41 @@ class QueueProcessor {
         } catch (error) {
             console.error('Error adding processing log:', error);
         }
+    }
+
+    /**
+     * Execute database operation with retry logic for SQLITE_BUSY errors
+     */
+    async withDatabaseRetry(operation, operationName = 'database_operation') {
+        const maxRetries = 5;
+        let lastError;
+
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                return await operation();
+            } catch (error) {
+                lastError = error;
+
+                // Check if it's a SQLITE_BUSY error
+                if (error.code === 'SQLITE_BUSY' || error.message.includes('SQLITE_BUSY')) {
+                    if (attempt < maxRetries) {
+                        const delay = Math.min(100 * Math.pow(2, attempt), 2000); // Exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms
+                        console.log(`⚠️ Database busy (${operationName}), retrying in ${delay}ms (attempt ${attempt}/${maxRetries})`);
+                        await this.delay(delay);
+                        continue;
+                    } else {
+                        console.error(`❌ Database busy error persisted after ${maxRetries} attempts (${operationName}):`, error.message);
+                        throw new Error(`Database is locked after ${maxRetries} attempts: ${error.message}`);
+                    }
+                } else {
+                    // Not a SQLITE_BUSY error, throw immediately
+                    throw error;
+                }
+            }
+        }
+
+        // This should never be reached, but just in case
+        throw lastError;
     }
 
     /**

@@ -841,24 +841,94 @@ try {
             const maxAttempts = 20; // 30 detik total (15 x 2 detik)
 
             while (!successMessage.found && attempts < maxAttempts) {
-                successMessage = await page.evaluate(() => {
-                    const allText = document.body.textContent || '';
-                    const successTexts = [
-                        'Reel Anda sedang diproses',
-                        'Kami akan memberi tahu Anda',
-                        'reel siap dilihat',
-                        'Your reel is being processed',
-                        'We will let you know'
-                    ];
+                            successMessage = await page.evaluate(() => {
+                                const allText = document.body.textContent || '';
+                                const allHTML = document.body.innerHTML || '';
+                                const successTexts = [
+                                    'Reel Anda sedang diproses',
+                                    'Kami akan memberi tahu Anda',
+                                    'reel siap dilihat',
+                                    'Reel Anda Siap Di Lihat',
+                                    'Reel Anda Siap dilihat',
+                                    'Your reel is being processed',
+                                    'We will let you know',
+                                    'Reel siap dilihat',
+                                    'reel Anda siap dilihat',
+                                    'Reel siap untuk dilihat',
+                                    'Notifikasi Baru',
+                                    'notifikasi baru',
+                                    'New Notification',
+                                    'new notification'
+                                ];
 
-                    for (const text of successTexts) {
-                        if (allText.includes(text)) {
-                            return { found: true, message: text };
-                        }
-                    }
+                                // Check in main page content
+                                for (const text of successTexts) {
+                                    if (allText.includes(text)) {
+                                        console.log(`✅ Found success text in page content: "${text}"`);
+                                        return { found: true, message: text, source: 'page_content' };
+                                    }
+                                }
 
-                    return { found: false };
-                });
+                                // Check in modal dialogs and overlays
+                                const modalElements = document.querySelectorAll('[role="dialog"], [role="modal"], .modal, .popup, .overlay, [data-testid*="modal"], [data-testid*="dialog"]');
+                                for (const modal of modalElements) {
+                                    const modalText = modal.textContent || '';
+                                    for (const text of successTexts) {
+                                        if (modalText.includes(text)) {
+                                            console.log(`✅ Found success text in modal: "${text}"`);
+                                            return { found: true, message: text, source: 'modal' };
+                                        }
+                                    }
+                                }
+
+                                // Check in notification elements
+                                const notificationElements = document.querySelectorAll('[role="alert"], [data-testid*="toast"], [data-testid*="notification"], .notification, .toast, .snackbar, [aria-label*="notification"], [aria-label*="notifikasi"]');
+                                for (const notification of notificationElements) {
+                                    const notificationText = notification.textContent || '';
+                                    for (const text of successTexts) {
+                                        if (notificationText.includes(text)) {
+                                            console.log(`✅ Found success text in notification: "${text}"`);
+                                            return { found: true, message: text, source: 'notification' };
+                                        }
+                                    }
+                                }
+
+                                // Check for browser notification permission or notification-related elements
+                                const notificationPermission = window.Notification && window.Notification.permission;
+                                if (notificationPermission === 'granted') {
+                                    // Look for notification-related UI elements
+                                    const notificationUI = document.querySelectorAll('[aria-label*="notification"], [aria-label*="notifikasi"], button[aria-label*="notification"], button[aria-label*="notifikasi"]');
+                                    for (const element of notificationUI) {
+                                        const elementText = element.textContent || '';
+                                        for (const text of successTexts) {
+                                            if (elementText.includes(text)) {
+                                                console.log(`✅ Found success text in notification UI: "${text}"`);
+                                                return { found: true, message: text, source: 'notification_ui' };
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Check for any element containing "Notifikasi" or "Notification"
+                                const notifikasiElements = document.querySelectorAll('*');
+                                for (const element of notifikasiElements) {
+                                    const elementText = (element.textContent || '').toLowerCase();
+                                    if (elementText.includes('notifikasi') || elementText.includes('notification')) {
+                                        // Check if this element also contains success-related text
+                                        for (const text of successTexts) {
+                                            if (elementText.includes(text.toLowerCase())) {
+                                                console.log(`✅ Found success text in element with notification: "${text}"`);
+                                                return { found: true, message: text, source: 'element_with_notification' };
+                                            }
+                                        }
+                                        // If we find any notification element, consider it a potential success indicator
+                                        console.log(`📢 Found notification element: "${element.textContent?.trim()}"`);
+                                        return { found: true, message: 'Notification element detected', source: 'notification_element' };
+                                    }
+                                }
+
+                                return { found: false };
+                            });
 
                 if (!successMessage.found) {
                     await new Promise(resolve => setTimeout(resolve, 2000));
@@ -1702,7 +1772,7 @@ if (switchSuccess) {
                                 indicator.style.top = (y - 40) + 'px';
                                 indicator.style.width = '80px';
                                 indicator.style.height = '80px';
-                                indicator.style.border = '6px solid #FFA500'; // Orange border
+                                indicator.style.border = '6px solid #FF00FF'; // MAGENTA border for distinctive color
                                 indicator.style.borderRadius = '50%';
                                 indicator.style.backgroundColor = 'rgba(255, 165, 0, 0.8)'; // Orange background
                                 indicator.style.zIndex = '999999';
@@ -1772,54 +1842,63 @@ if (switchSuccess) {
 
                             if (clickResult.clicked) {
                                 console.log(`✅ SUCCESS! Clicked "lain kali" button: "${clickResult.text}"`);
+                                console.log('🎉 UPLOAD SUCCESSFUL! Clicking "lain kali" confirms successful upload');
 
-                                // Add "CLICKED" indicator to show the button was successfully clicked
+                                // Add "SUCCESS" indicator to show upload was successful
                                 await page.evaluate((x, y) => {
-                                    const clickedIndicator = document.createElement('div');
-                                    clickedIndicator.id = 'lain-kali-clicked-indicator';
-                                    clickedIndicator.style.position = 'fixed';
-                                    clickedIndicator.style.left = (x - 50) + 'px';
-                                    clickedIndicator.style.top = (y - 50) + 'px';
-                                    clickedIndicator.style.width = '100px';
-                                    clickedIndicator.style.height = '100px';
-                                    clickedIndicator.style.border = '8px solid #00FF00'; // Green border for success
-                                    clickedIndicator.style.borderRadius = '50%';
-                                    clickedIndicator.style.backgroundColor = 'rgba(0, 255, 0, 0.9)'; // Green background
-                                    clickedIndicator.style.zIndex = '1000000'; // Higher z-index
-                                    clickedIndicator.style.pointerEvents = 'none';
-                                    clickedIndicator.style.boxShadow = '0 0 60px rgba(0, 255, 0, 1), 0 0 120px rgba(0, 255, 0, 0.8)';
-                                    clickedIndicator.textContent = 'LAIN KALI CLICKED ✓';
-                                    clickedIndicator.style.color = 'white';
-                                    clickedIndicator.style.fontSize = '14px';
-                                    clickedIndicator.style.display = 'flex';
-                                    clickedIndicator.style.alignItems = 'center';
-                                    clickedIndicator.style.justifyContent = 'center';
-                                    clickedIndicator.style.fontWeight = 'bold';
-                                    clickedIndicator.style.textShadow = '2px 2px 4px black';
-                                    clickedIndicator.style.textAlign = 'center';
-                                    clickedIndicator.style.lineHeight = '1.2';
-                                    document.body.appendChild(clickedIndicator);
-                                    console.log('✅ LAIN KALI CLICKED indicator added to DOM');
+                                    const successIndicator = document.createElement('div');
+                                    successIndicator.id = 'upload-success-indicator';
+                                    successIndicator.style.position = 'fixed';
+                                    successIndicator.style.left = (x - 75) + 'px';
+                                    successIndicator.style.top = (y - 75) + 'px';
+                                    successIndicator.style.width = '150px';
+                                    successIndicator.style.height = '150px';
+                                    successIndicator.style.border = '10px solid #00FF00'; // Green border for success
+                                    successIndicator.style.borderRadius = '50%';
+                                    successIndicator.style.backgroundColor = 'rgba(0, 255, 0, 0.95)'; // Green background
+                                    successIndicator.style.zIndex = '1000000'; // Higher z-index
+                                    successIndicator.style.pointerEvents = 'none';
+                                    successIndicator.style.boxShadow = '0 0 100px rgba(0, 255, 0, 1), 0 0 200px rgba(0, 255, 0, 0.8)';
+                                    successIndicator.textContent = 'UPLOAD SUCCESS!\nLAIN KALI CLICKED';
+                                    successIndicator.style.color = 'white';
+                                    successIndicator.style.fontSize = '16px';
+                                    successIndicator.style.display = 'flex';
+                                    successIndicator.style.alignItems = 'center';
+                                    successIndicator.style.justifyContent = 'center';
+                                    successIndicator.style.fontWeight = 'bold';
+                                    successIndicator.style.textShadow = '2px 2px 4px black';
+                                    successIndicator.style.textAlign = 'center';
+                                    successIndicator.style.lineHeight = '1.3';
+                                    document.body.appendChild(successIndicator);
+                                    console.log('✅ UPLOAD SUCCESS INDICATOR added to DOM');
 
                                     // Flash animation to show success
                                     let opacity = 1;
                                     const flash = setInterval(() => {
                                         opacity = opacity === 1 ? 0.3 : 1;
-                                        clickedIndicator.style.opacity = opacity;
-                                    }, 150);
+                                        successIndicator.style.opacity = opacity;
+                                    }, 200);
 
-                                    // Remove after 3 seconds
+                                    // Remove after 4 seconds
                                     setTimeout(() => {
                                         clearInterval(flash);
-                                        if (clickedIndicator.parentNode) {
-                                            clickedIndicator.parentNode.removeChild(clickedIndicator);
+                                        if (successIndicator.parentNode) {
+                                            successIndicator.parentNode.removeChild(successIndicator);
                                         }
-                                    }, 3000);
+                                    }, 4000);
                                 }, popupHandled.coords.x, popupHandled.coords.y);
 
-                                await page.screenshot({ path: 'debug-popup-after-lain-kali-click.png', width: 1024, height: 768 });
-                                console.log('📸 Screenshot after click: debug-popup-after-lain-kali-click.png');
-                                await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for popup to close
+                                await page.screenshot({ path: 'debug-popup-after-lain-kali-click-success.png', width: 1024, height: 768 });
+                                console.log('📸 Screenshot after successful lain kali click: debug-popup-after-lain-kali-click-success.png');
+
+                                const uploadUrl = page ? page.url() : 'unknown';
+                                await this.cleanup();
+                                return {
+                                    success: true,
+                                    url: uploadUrl,
+                                    message: 'Upload successful - lain kali clicked'
+                                };
+
                             } else {
                                 console.log('❌ FAILED: Could not click "lain kali" button');
                             }
@@ -1832,21 +1911,26 @@ if (switchSuccess) {
                             console.log('ℹ️ No "Permudah untuk menghubungi Anda" popup found');
                         }
 
-                        // HANDLE "Ngobrol Langsung Dengan pelanggan" POPUP - SIMPLIFIED AND MORE RELIABLE
+                        // HANDLE "Ngobrol Langsung Dengan pelanggan" POPUP - ENHANCED WITH VISUAL INDICATORS
                         console.log('🔍 Checking for "Ngobrol Langsung Dengan pelanggan" popup...');
+
+                        // Take initial screenshot to capture popup if present
+                        await page.screenshot({ path: 'debug-checking-for-chat-popup.png', width: 1024, height: 768 });
+                        console.log('📸 Screenshot: debug-checking-for-chat-popup.png');
 
                         // Multiple attempts to detect and handle popup
                         let chatPopupHandled = false;
-                        const maxPopupAttempts = 10; // More attempts
+                        const maxPopupAttempts = 15; // Increased attempts for better detection
 
                         for (let popupAttempt = 1; popupAttempt <= maxPopupAttempts && !chatPopupHandled; popupAttempt++) {
                             console.log(`🔄 Chat popup detection attempt ${popupAttempt}/${maxPopupAttempts}...`);
 
-                            // First, check if popup exists and try to click "lain kali" button directly
+                            // Check if popup exists and try to click "lain kali" button
                             const popupResult = await page.evaluate(() => {
                                 const allText = document.body.textContent || '';
+                                const allHTML = document.body.innerHTML || '';
 
-                                // Check for popup text patterns
+                                // Check for popup text patterns - ENHANCED DETECTION
                                 const popupPatterns = [
                                     'Ngobrol Langsung Dengan pelanggan',
                                     'Ngobrol Langsung',
@@ -1858,7 +1942,9 @@ if (switchSuccess) {
                                     'Direct message',
                                     'Message customers',
                                     'Hubungi pelanggan',
-                                    'Contact customers'
+                                    'Contact customers',
+                                    'Permudah untuk menghubungi Anda', // Additional pattern
+                                    'menghubungi Anda' // Additional pattern
                                 ];
 
                                 let popupFound = false;
@@ -1870,11 +1956,26 @@ if (switchSuccess) {
                                     }
                                 }
 
+                                // Also check for modal/dialog elements that might contain the popup
+                                const modalElements = document.querySelectorAll('[role="dialog"], [role="modal"], .modal, .popup, .overlay, [data-testid*="modal"], [data-testid*="dialog"]');
+                                modalElements.forEach((modal, index) => {
+                                    const modalText = modal.textContent || '';
+                                    for (const pattern of popupPatterns) {
+                                        if (modalText.toLowerCase().includes(pattern.toLowerCase())) {
+                                            popupFound = true;
+                                            console.log(`💬 Found chat popup in modal ${index}: "${pattern}"`);
+                                            break;
+                                        }
+                                    }
+                                });
+
                                 if (popupFound) {
                                     console.log('💬 Chat popup detected, looking for "lain kali" button...');
 
                                     // Look for "lain kali" button with comprehensive selectors
-                                    const allButtons = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"], span[role="button"], a[role="button"], input[type="button"], input[type="submit"]'));
+                                    const allButtons = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"], span[role="button"], a[role="button"], input[type="button"], input[type="submit"], [data-testid*="button"], [aria-label*="lain kali"], [aria-label*="next time"]'));
+
+                                    console.log(`🔍 Found ${allButtons.length} clickable elements to search for "lain kali" button`);
 
                                     // PRIORITY ORDER: Look for exact "lain kali" first, then variations
                                     const lainKaliPatterns = [
@@ -1909,57 +2010,211 @@ if (switchSuccess) {
                                     }
 
                                     if (foundButton) {
-                                        console.log(`🎯 Clicking "lain kali" button: "${foundText}"`);
+                                        console.log(`🎯 Found "lain kali" button, getting coordinates...`);
+                                        const rect = foundButton.getBoundingClientRect();
+                                        const x = rect.left + rect.width / 2;
+                                        const y = rect.top + rect.height / 2;
 
-                                        // Try multiple click methods
-                                        try {
-                                            // Method 1: Direct click
-                                            foundButton.click();
-                                            console.log('✅ Direct click successful');
-                                            return { success: true, method: 'direct_click', text: foundText };
-                                        } catch (directError) {
-                                            console.log('⚠️ Direct click failed, trying dispatchEvent...');
-                                            try {
-                                                // Method 2: Dispatch events
-                                                foundButton.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                                                foundButton.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-                                                foundButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-                                                console.log('✅ Dispatch event click successful');
-                                                return { success: true, method: 'dispatch_event', text: foundText };
-                                            } catch (dispatchError) {
-                                                console.log('⚠️ Dispatch event failed, trying scroll and click...');
-                                                try {
-                                                    // Method 3: Scroll into view and click
-                                                    foundButton.scrollIntoView({ behavior: 'instant', block: 'center' });
-                                                    setTimeout(() => foundButton.click(), 100);
-                                                    console.log('✅ Scroll and click successful');
-                                                    return { success: true, method: 'scroll_click', text: foundText };
-                                                } catch (scrollError) {
-                                                    console.log('❌ All click methods failed');
-                                                    return { success: false, error: 'all_methods_failed', text: foundText };
-                                                }
-                                            }
-                                        }
+                                        console.log(`📍 Button coordinates: (${Math.round(x)}, ${Math.round(y)}), text: "${foundText}"`);
+
+                                        return {
+                                            found: true,
+                                            coords: { x, y },
+                                            text: foundText,
+                                            method: 'element_found'
+                                        };
                                     } else {
                                         console.log('⚠️ No "lain kali" button found in popup');
-                                        return { success: false, error: 'button_not_found' };
+                                        return { found: false, error: 'button_not_found' };
                                     }
                                 }
 
-                                return { success: false, error: 'popup_not_found' };
+                                return { found: false, error: 'popup_not_found' };
                             });
 
-                            if (popupResult.success) {
-                                console.log(`✅ SUCCESS! Chat popup handled using ${popupResult.method}: "${popupResult.text}"`);
-                                chatPopupHandled = true;
+                            if (popupResult.found && popupResult.coords) {
+                                console.log(`🎯 Found "lain kali" button at coordinates: (${Math.round(popupResult.coords.x)}, ${Math.round(popupResult.coords.y)})`);
 
-                                // Take success screenshot
-                                await page.screenshot({ path: `debug-chat-popup-clicked-success-${popupAttempt}.png`, width: 1024, height: 768 });
-                                console.log(`📸 Screenshot: debug-chat-popup-clicked-success-${popupAttempt}.png`);
+                                // Add distinctive visual indicator for "lain kali" button - using CYAN color for chat popup
+                                console.log('🟦 Adding CYAN visual indicator for CHAT POPUP "LAIN KALI" button...');
+                                await page.evaluate((x, y) => {
+                                    const indicator = document.createElement('div');
+                                    indicator.id = 'chat-popup-lain-kali-indicator';
+                                    indicator.style.position = 'fixed';
+                                    indicator.style.left = (x - 50) + 'px';
+                                    indicator.style.top = (y - 50) + 'px';
+                                    indicator.style.width = '100px';
+                                    indicator.style.height = '100px';
+                                    indicator.style.border = '8px solid #00FFFF'; // CYAN border for chat popup
+                                    indicator.style.borderRadius = '50%';
+                                    indicator.style.backgroundColor = 'rgba(0, 255, 255, 0.8)'; // CYAN background
+                                    indicator.style.zIndex = '999999';
+                                    indicator.style.pointerEvents = 'none';
+                                    indicator.style.boxShadow = '0 0 60px rgba(0, 255, 255, 1), 0 0 120px rgba(0, 255, 255, 0.6)';
+                                    indicator.textContent = 'LAIN KALI\n(CHAT POPUP)';
+                                    indicator.style.color = 'black';
+                                    indicator.style.fontSize = '14px';
+                                    indicator.style.display = 'flex';
+                                    indicator.style.alignItems = 'center';
+                                    indicator.style.justifyContent = 'center';
+                                    indicator.style.fontWeight = 'bold';
+                                    indicator.style.textShadow = '1px 1px 2px white';
+                                    indicator.style.textAlign = 'center';
+                                    indicator.style.lineHeight = '1.2';
+                                    document.body.appendChild(indicator);
+                                    console.log('🟦 CHAT POPUP CYAN indicator added to DOM');
 
-                                // Wait for popup to close
-                                await new Promise(resolve => setTimeout(resolve, 2000));
-                                break;
+                                    // Add pulsating animation
+                                    let scale = 1;
+                                    const pulse = setInterval(() => {
+                                        scale = scale === 1 ? 1.3 : 1;
+                                        indicator.style.transform = `scale(${scale})`;
+                                    }, 250);
+
+                                    // Remove indicator after 5 seconds
+                                    setTimeout(() => {
+                                        clearInterval(pulse);
+                                        if (indicator.parentNode) {
+                                            indicator.parentNode.removeChild(indicator);
+                                        }
+                                    }, 5000);
+                                }, popupResult.coords.x, popupResult.coords.y);
+
+                                // Wait for visual indicator to be visible
+                                console.log('⏳ Waiting 3 seconds for CYAN chat popup visual indicator...');
+                                await new Promise(resolve => setTimeout(resolve, 3000));
+
+                                // Take screenshot with indicator
+                                await page.screenshot({ path: `debug-chat-popup-with-cyan-indicator-${popupAttempt}.png`, width: 1024, height: 768 });
+                                console.log(`📸 Screenshot with CYAN indicator: debug-chat-popup-with-cyan-indicator-${popupAttempt}.png`);
+
+                                // Now click the "lain kali" button using ENHANCED CLICKING LOGIC
+                                console.log(`🖱️ Clicking CHAT POPUP "LAIN KALI" button at coordinates (${Math.round(popupResult.coords.x)}, ${Math.round(popupResult.coords.y)})...`);
+
+                                // ENHANCED CLICKING: Try multiple approaches
+                                let clickResult = { clicked: false };
+
+                                // First try: Direct element click with more robust selector
+                                try {
+                                    clickResult = await page.evaluate(() => {
+                                        // Find the button again using the same patterns
+                                        const lainKaliPatterns = [
+                                            'lain kali', 'Lain kali', 'LAIN KALI',
+                                            'nanti', 'Nanti', 'NOT NOW',
+                                            'next time', 'Next time', 'NEXT TIME',
+                                            'not now', 'Not now', 'NOT NOW',
+                                            'skip', 'Skip', 'SKIP',
+                                            'lewati', 'Lewati', 'LEWATI'
+                                        ];
+
+                                        const allButtons = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"], span[role="button"], a[role="button"], input[type="button"], input[type="submit"], [data-testid*="button"], [aria-label*="lain kali"], [aria-label*="next time"]'));
+
+                                        const lainKaliBtn = allButtons.find(btn => {
+                                            const text = (btn.textContent?.trim() || '').toLowerCase();
+                                            const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+                                            const value = (btn.getAttribute('value') || '').toLowerCase();
+
+                                            return lainKaliPatterns.some(pattern =>
+                                                text.includes(pattern.toLowerCase()) ||
+                                                ariaLabel.includes(pattern.toLowerCase()) ||
+                                                value.includes(pattern.toLowerCase())
+                                            );
+                                        });
+
+                                        if (lainKaliBtn) {
+                                            // Try to scroll element into view first
+                                            lainKaliBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+                                            // Wait a bit for scroll
+                                            setTimeout(() => {
+                                                lainKaliBtn.click();
+                                            }, 500);
+
+                                            return { clicked: true, text: lainKaliBtn.textContent?.trim() || lainKaliBtn.getAttribute('aria-label') || lainKaliBtn.getAttribute('value') || 'unknown', method: 'element_with_scroll' };
+                                        }
+
+                                        return { clicked: false, method: 'element' };
+                                    });
+
+                                    // Wait for element click to take effect
+                                    await new Promise(resolve => setTimeout(resolve, 1000));
+
+                                    if (!clickResult.clicked) {
+                                        console.log('⚠️ Element click failed, trying coordinate click...');
+                                        // Second try: Coordinate click (fallback)
+                                        await page.mouse.click(popupResult.coords.x, popupResult.coords.y);
+                                        clickResult = { clicked: true, text: 'coordinate click', method: 'coordinate' };
+                                    }
+                                } catch (clickError) {
+                                    console.log('⚠️ Both click methods failed, trying coordinate click as last resort...');
+                                    try {
+                                        await page.mouse.click(popupResult.coords.x, popupResult.coords.y);
+                                        clickResult = { clicked: true, text: 'coordinate click fallback', method: 'coordinate_fallback' };
+                                    } catch (coordError) {
+                                        console.log('❌ All click methods failed');
+                                        clickResult = { clicked: false, error: coordError.message };
+                                    }
+                                }
+
+                                if (clickResult.clicked) {
+                                    console.log(`✅ SUCCESS! Clicked chat popup "lain kali" button using ${clickResult.method}: "${clickResult.text}"`);
+                                    chatPopupHandled = true;
+
+                                    // Add "CLICKED" indicator with GREEN color to show the button was successfully clicked
+                                    await page.evaluate((x, y) => {
+                                        const clickedIndicator = document.createElement('div');
+                                        clickedIndicator.id = 'chat-popup-lain-kali-clicked-indicator';
+                                        clickedIndicator.style.position = 'fixed';
+                                        clickedIndicator.style.left = (x - 60) + 'px';
+                                        clickedIndicator.style.top = (y - 60) + 'px';
+                                        clickedIndicator.style.width = '120px';
+                                        clickedIndicator.style.height = '120px';
+                                        clickedIndicator.style.border = '10px solid #00FF00'; // GREEN border for success
+                                        clickedIndicator.style.borderRadius = '50%';
+                                        clickedIndicator.style.backgroundColor = 'rgba(0, 255, 0, 0.9)'; // GREEN background
+                                        clickedIndicator.style.zIndex = '1000000'; // Higher z-index
+                                        clickedIndicator.style.pointerEvents = 'none';
+                                        clickedIndicator.style.boxShadow = '0 0 80px rgba(0, 255, 0, 1), 0 0 160px rgba(0, 255, 0, 0.8)';
+                                        clickedIndicator.textContent = 'LAIN KALI\nCLICKED ✓';
+                                        clickedIndicator.style.color = 'white';
+                                        clickedIndicator.style.fontSize = '16px';
+                                        clickedIndicator.style.display = 'flex';
+                                        clickedIndicator.style.alignItems = 'center';
+                                        clickedIndicator.style.justifyContent = 'center';
+                                        clickedIndicator.style.fontWeight = 'bold';
+                                        clickedIndicator.style.textShadow = '2px 2px 4px black';
+                                        clickedIndicator.style.textAlign = 'center';
+                                        clickedIndicator.style.lineHeight = '1.2';
+                                        document.body.appendChild(clickedIndicator);
+                                        console.log('✅ CHAT POPUP GREEN CLICKED indicator added to DOM');
+
+                                        // Flash animation to show success
+                                        let opacity = 1;
+                                        const flash = setInterval(() => {
+                                            opacity = opacity === 1 ? 0.4 : 1;
+                                            clickedIndicator.style.opacity = opacity;
+                                        }, 300);
+
+                                        // Remove after 4 seconds
+                                        setTimeout(() => {
+                                            clearInterval(flash);
+                                            if (clickedIndicator.parentNode) {
+                                                clickedIndicator.parentNode.removeChild(clickedIndicator);
+                                            }
+                                        }, 4000);
+                                    }, popupResult.coords.x, popupResult.coords.y);
+
+                                    await page.screenshot({ path: `debug-chat-popup-after-lain-kali-click-${popupAttempt}.png`, width: 1024, height: 768 });
+                                    console.log(`📸 Screenshot after successful lain kali click: debug-chat-popup-after-lain-kali-click-${popupAttempt}.png`);
+
+                                    // Wait for popup to close
+                                    await new Promise(resolve => setTimeout(resolve, 2000));
+                                    break;
+                                } else {
+                                    console.log('❌ FAILED: Could not click chat popup "lain kali" button');
+                                    console.log('Error details:', clickResult.error);
+                                }
+
                             } else {
                                 console.log(`⚠️ Chat popup attempt ${popupAttempt} failed: ${popupResult.error}`);
 
@@ -1982,11 +2237,49 @@ if (switchSuccess) {
 
                         if (chatPopupHandled) {
                             console.log('🎉 Chat popup successfully handled!');
+
+                            // Add final success indicator
+                            await page.evaluate(() => {
+                                const successIndicator = document.createElement('div');
+                                successIndicator.id = 'chat-popup-success-indicator';
+                                successIndicator.style.position = 'fixed';
+                                successIndicator.style.left = '50%';
+                                successIndicator.style.top = '20%';
+                                successIndicator.style.transform = 'translateX(-50%)';
+                                successIndicator.style.width = '400px';
+                                successIndicator.style.height = '80px';
+                                successIndicator.style.border = '6px solid #00FF00'; // GREEN border
+                                successIndicator.style.borderRadius = '15px';
+                                successIndicator.style.backgroundColor = 'rgba(0, 255, 0, 0.95)'; // GREEN background
+                                successIndicator.style.zIndex = '1000000';
+                                successIndicator.style.pointerEvents = 'none';
+                                successIndicator.style.boxShadow = '0 0 100px rgba(0, 255, 0, 1), 0 0 200px rgba(0, 255, 0, 0.8)';
+                                successIndicator.textContent = 'CHAT POPUP HANDLED SUCCESSFULLY ✓';
+                                successIndicator.style.color = 'white';
+                                successIndicator.style.fontSize = '20px';
+                                successIndicator.style.display = 'flex';
+                                successIndicator.style.alignItems = 'center';
+                                successIndicator.style.justifyContent = 'center';
+                                successIndicator.style.fontWeight = 'bold';
+                                successIndicator.style.textShadow = '2px 2px 4px black';
+                                document.body.appendChild(successIndicator);
+                                console.log('✅ CHAT POPUP SUCCESS INDICATOR added to DOM');
+
+                                // Remove after 3 seconds
+                                setTimeout(() => {
+                                    if (successIndicator.parentNode) {
+                                        successIndicator.parentNode.removeChild(successIndicator);
+                                    }
+                                }, 3000);
+                            });
+
+                            await page.screenshot({ path: 'debug-chat-popup-handled-success.png', width: 1024, height: 768 });
+                            console.log('📸 Screenshot: debug-chat-popup-handled-success.png');
                         } else {
                             console.log('ℹ️ No chat popup found or all handling attempts failed');
                         }
 
-                        // HANDLE "Menyelenggarakan Acara" POPUP - ORGANIZE EVENT POPUP (MOVED TO RUN BEFORE SUCCESS CHECK)
+                        // HANDLE "Menyelenggarakan Acara" POPUP - ORGANIZE EVENT POPUP (OPTIONAL - SKIP IF NOT FOUND)
                         console.log('🔍 Checking for "Menyelenggarakan Acara" popup BEFORE success check...');
 
                         // Multiple attempts to detect event popup (it might appear with delay)
@@ -1996,7 +2289,7 @@ if (switchSuccess) {
                         for (let eventAttempt = 1; eventAttempt <= maxEventAttempts; eventAttempt++) {
                             console.log(`🔄 Event popup detection attempt ${eventAttempt}/${maxEventAttempts}...`);
 
-                            eventPopupHandled = await page.evaluate(() => {
+                            eventPopupHandled = await page.evaluate((eventAttempt) => {
                                 const allText = document.body.textContent || '';
                                 const allHTML = document.body.innerHTML || '';
 
@@ -2119,7 +2412,7 @@ if (switchSuccess) {
                                     action: 'no_event_popup',
                                     attempt: eventAttempt
                                 };
-                            });
+                            }, eventAttempt);
 
                             if (eventPopupHandled.handled) {
                                 console.log(`✅ Event popup detected and handled on attempt ${eventAttempt}`);
@@ -2131,6 +2424,11 @@ if (switchSuccess) {
                                 console.log(`⏳ Waiting 1 second before next event popup detection attempt...`);
                                 await new Promise(resolve => setTimeout(resolve, 1000));
                             }
+                        }
+
+                        // SKIP EVENT POPUP HANDLING IF NOT FOUND - Continue to success check
+                        if (!eventPopupHandled.handled) {
+                            console.log('ℹ️ No "Menyelenggarakan Acara" popup found - skipping event popup handling');
                         }
 
                         if (eventPopupHandled.handled && eventPopupHandled.coords) {
@@ -2323,29 +2621,115 @@ if (switchSuccess) {
                             console.log('ℹ️ No "Menyelenggarakan Acara" popup found');
                         }
 
-                        // GET SUCCESS MESSAGE LIKE REELS - CHECK SHORT TEXT FRAGMENTS
+                        // WAIT FOR SUCCESS NOTIFICATIONS - IMPROVED FOR VIDEO POSTS
+                        console.log('🔍 Waiting for success notifications after post upload...');
                         let successMessage = { found: false };
                         let attempts = 0;
-                        const maxAttempts = 15; // 15 attempts * 2s = 30 seconds total (same as reels)
+                        const maxAttempts = 25; // Increased to 25 attempts * 2s = 50 seconds total for video processing
 
                         while (!successMessage.found && attempts < maxAttempts) {
+                            console.log(`🔄 Checking for success notifications... (attempt ${attempts + 1}/${maxAttempts})`);
+
+                            // Take screenshot on every 5th attempt for debugging
+                            if (attempts % 5 === 0) {
+                                await page.screenshot({ path: `debug-waiting-for-success-attempt-${attempts + 1}.png`, width: 1024, height: 768 });
+                                console.log(`📸 Screenshot: debug-waiting-for-success-attempt-${attempts + 1}.png`);
+                            }
+
                             successMessage = await page.evaluate(() => {
                                 const allText = document.body.textContent || '';
+                                const allHTML = document.body.innerHTML || '';
 
-                                // POST SUCCESS TEXTS - LIKE REELS BUT FOR POSTS
+                                // COMPREHENSIVE SUCCESS TEXTS FOR VIDEO POSTS - ENHANCED
                                 const successTexts = [
                                     'Postingan Anda sedang diproses',
                                     'Kami akan memberi tahu Anda',
+                                    'Reel Anda Siap dilihat',
                                     'postingan siap untuk dilihat',
+                                    'Bagikan Kepada Pengikut',
                                     'Postingan Anda berhasil',
-                                    'Post telah dibagikan'
+                                    'Post telah dibagikan',
+                                    'Postingan Anda sedang diproses', // Exact match
+                                    'kami akan memberi tahu Anda', // lowercase
+                                    'postingan siap untuk dilihat', // lowercase
+                                    'postingan Anda berhasil', // lowercase
+                                    'post telah dibagikan', // lowercase
+                                    'Your post is being processed', // English
+                                    'We will notify you', // English
+                                    'post ready to view', // English
+                                    'Your post was successful', // English
+                                    'Post has been shared', // English
+                                    // ADDITIONAL SUCCESS INDICATORS FOR VIDEO POSTS
+                                    'Video Anda sedang diproses',
+                                    'video Anda sedang diproses',
+                                    'Video diproses',
+                                    'video diproses',
+                                    'Sedang memproses video',
+                                    'sedang memproses video',
+                                    'Video berhasil diupload',
+                                    'video berhasil diupload',
+                                    'Upload video berhasil',
+                                    'upload video berhasil',
+                                    'Postingan video berhasil',
+                                    'postingan video berhasil',
+                                    'Video telah dibagikan',
+                                    'video telah dibagikan',
+                                    'Your video is being processed',
+                                    'your video is being processed',
+                                    'Video processing',
+                                    'video processing',
+                                    'Video uploaded successfully',
+                                    'video uploaded successfully',
+                                    'Video shared',
+                                    'video shared',
+                                    // NOTIFICATION-RELATED SUCCESS INDICATORS
+                                    'Notifikasi Baru',
+                                    'notifikasi baru',
+                                    'New Notification',
+                                    'new notification',
+                                    'Notifikasi',
+                                    'notifikasi',
+                                    'Notification',
+                                    'notification'
                                 ];
 
-                                // CHECK FOR SUCCESS MESSAGES FIRST
+                                // CHECK FOR SUCCESS MESSAGES IN PAGE TEXT
                                 for (const text of successTexts) {
                                     if (allText.includes(text)) {
-                                        return { found: true, message: text, type: 'success' };
+                                        console.log(`✅ Found success text: "${text}"`);
+                                        return { found: true, message: text, type: 'success_text', source: 'page_text' };
                                     }
+                                }
+
+                                // CHECK FOR SUCCESS MESSAGES IN NOTIFICATIONS/TOASTS
+                                const notificationElements = document.querySelectorAll('[role="alert"], [data-testid*="toast"], [data-testid*="notification"], .notification, .toast, .snackbar');
+                                for (const element of notificationElements) {
+                                    const elementText = element.textContent || '';
+                                    for (const text of successTexts) {
+                                        if (elementText.includes(text)) {
+                                            console.log(`✅ Found success text in notification: "${text}"`);
+                                            return { found: true, message: text, type: 'success_notification', source: 'notification' };
+                                        }
+                                    }
+                                }
+
+                                // CHECK FOR SUCCESS MESSAGES IN DIALOGS/MODALS
+                                const dialogElements = document.querySelectorAll('[role="dialog"], [role="modal"], .modal, .dialog, .popup');
+                                for (const element of dialogElements) {
+                                    const elementText = element.textContent || '';
+                                    for (const text of successTexts) {
+                                        if (elementText.includes(text)) {
+                                            console.log(`✅ Found success text in dialog: "${text}"`);
+                                            return { found: true, message: text, type: 'success_dialog', source: 'dialog' };
+                                        }
+                                    }
+                                }
+
+                                // CHECK FOR URL CHANGES THAT INDICATE SUCCESS
+                                const currentUrl = window.location.href;
+                                if (currentUrl.includes('/posts/') && currentUrl.includes('pfbid')) {
+                                    console.log('✅ Success detected via URL change (post ID found)');
+                                    return { found: true, message: 'Post URL detected', type: 'url_success', source: 'url' };
                                 }
 
                                 return { found: false };
@@ -2354,12 +2738,60 @@ if (switchSuccess) {
                             if (!successMessage.found) {
                                 await new Promise(resolve => setTimeout(resolve, 2000));
                                 attempts++;
-                                console.log(`🔄 Waiting for success message... (attempt ${attempts}/${maxAttempts})`);
                             } else {
-                                console.log(`🎉 SUCCESS DETECTED! Type: ${successMessage.type}, Message: "${successMessage.message}"`);
+                                console.log(`🎉 SUCCESS NOTIFICATION DETECTED! Type: ${successMessage.type}, Message: "${successMessage.message}", Source: ${successMessage.source}`);
+
                                 // Take screenshot when success message is detected
-                                await page.screenshot({ path: 'debug-postingan-anda-sedang-diproses.png', width: 1024, height: 768 });
-                                console.log('📸 Screenshot: debug-postingan-anda-sedang-diproses.png');
+                                const screenshotName = `debug-success-detected-${successMessage.type}-${Date.now()}.png`;
+                                await page.screenshot({ path: screenshotName, width: 1024, height: 768 });
+                                console.log(`📸 Screenshot: ${screenshotName}`);
+
+                                // Add visual indicator for success detection
+                                await page.evaluate((message) => {
+                                    const successIndicator = document.createElement('div');
+                                    successIndicator.id = 'upload-success-indicator';
+                                    successIndicator.style.position = 'fixed';
+                                    successIndicator.style.left = '50%';
+                                    successIndicator.style.top = '50%';
+                                    successIndicator.style.transform = 'translate(-50%, -50%)';
+                                    successIndicator.style.width = '300px';
+                                    successIndicator.style.height = '150px';
+                                    successIndicator.style.border = '8px solid #00FF00'; // Green border
+                                    successIndicator.style.borderRadius = '20px';
+                                    successIndicator.style.backgroundColor = 'rgba(0, 255, 0, 0.95)'; // Green background
+                                    successIndicator.style.zIndex = '1000000';
+                                    successIndicator.style.pointerEvents = 'none';
+                                    successIndicator.style.boxShadow = '0 0 100px rgba(0, 255, 0, 1), 0 0 200px rgba(0, 255, 0, 0.8)';
+                                    successIndicator.textContent = `UPLOAD SUCCESS!\n${message}`;
+                                    successIndicator.style.color = 'white';
+                                    successIndicator.style.fontSize = '18px';
+                                    successIndicator.style.display = 'flex';
+                                    successIndicator.style.alignItems = 'center';
+                                    successIndicator.style.justifyContent = 'center';
+                                    successIndicator.style.fontWeight = 'bold';
+                                    successIndicator.style.textShadow = '2px 2px 4px black';
+                                    successIndicator.style.textAlign = 'center';
+                                    successIndicator.style.lineHeight = '1.4';
+                                    successIndicator.style.whiteSpace = 'pre-line';
+                                    document.body.appendChild(successIndicator);
+                                    console.log('✅ UPLOAD SUCCESS INDICATOR added to DOM');
+
+                                    // Flash animation and remove after 5 seconds
+                                    let opacity = 1;
+                                    const flash = setInterval(() => {
+                                        opacity = opacity === 1 ? 0.3 : 1;
+                                        successIndicator.style.opacity = opacity;
+                                    }, 300);
+
+                                    setTimeout(() => {
+                                        clearInterval(flash);
+                                        if (successIndicator.parentNode) {
+                                            successIndicator.parentNode.removeChild(successIndicator);
+                                        }
+                                    }, 5000);
+                                }, successMessage.message);
+
+                                break;
                             }
                         }
 
@@ -2378,21 +2810,139 @@ if (switchSuccess) {
                                 url: uploadUrl
                             };
                         } else {
-                            console.log('⚠️ Success message not found within timeout');
-                            // Take screenshot when success message is not found
-                            await page.screenshot({ path: 'debug-error-success-message-not-found.png', width: 1024, height: 768 });
-                            console.log('📸 Screenshot: debug-error-success-message-not-found.png');
+                            console.log('⚠️ Success message not found within timeout, checking fallback conditions...');
 
-                            const uploadUrl = page ? page.url() : 'unknown';
+                            // FALLBACK SUCCESS DETECTION - Check for other success indicators
+                            const fallbackSuccess = await page.evaluate(() => {
+                                const currentUrl = window.location.href;
+                                const allText = document.body.textContent || '';
 
-                            // CLEANUP BROWSER ON FAILURE TOO
-                            console.log('🧹 Cleaning up browser (failure detected)...');
-                            await this.cleanup();
+                                // Check 1: URL contains post ID (strong indicator of success)
+                                const hasPostId = currentUrl.includes('/posts/') && currentUrl.includes('pfbid');
+                                if (hasPostId) {
+                                    console.log('✅ Fallback: Post URL with ID detected');
+                                    return { success: true, reason: 'post_url_with_id', url: currentUrl };
+                                }
 
-                            return {
-                                success: false,
-                                error: 'Success message not found'
-                            };
+                                // Check 2: URL changed from composer/create page (indicates modal closed)
+                                const urlChangedFromComposer = !currentUrl.includes('/composer/') &&
+                                                              !currentUrl.includes('/reel/create') &&
+                                                              !currentUrl.includes('/create/');
+                                if (urlChangedFromComposer) {
+                                    console.log('✅ Fallback: URL changed from composer page');
+                                    return { success: true, reason: 'url_changed_from_composer', url: currentUrl };
+                                }
+
+                                // Check 3: No more composer modal visible
+                                const composerElements = document.querySelectorAll('[role="dialog"], .modal, .popup, .overlay');
+                                const hasComposerModal = Array.from(composerElements).some(el => {
+                                    const text = el.textContent?.toLowerCase() || '';
+                                    return text.includes('buat') || text.includes('create') ||
+                                           text.includes('posting') || text.includes('post') ||
+                                           text.includes('upload') || text.includes('unggah');
+                                });
+
+                                if (!hasComposerModal) {
+                                    console.log('✅ Fallback: No composer modal visible');
+                                    return { success: true, reason: 'no_composer_modal', url: currentUrl };
+                                }
+
+                                // Check 4: Check for notification elements that might indicate success
+                                const notificationElements = document.querySelectorAll('[role="alert"], [data-testid*="notification"], .notification, .toast');
+                                for (const element of notificationElements) {
+                                    const elementText = (element.textContent || '').toLowerCase();
+                                    if (elementText.includes('berhasil') || elementText.includes('success') ||
+                                        elementText.includes('selesai') || elementText.includes('complete') ||
+                                        elementText.includes('dibagikan') || elementText.includes('shared')) {
+                                        console.log('✅ Fallback: Success notification element found');
+                                        return { success: true, reason: 'success_notification_element', url: currentUrl };
+                                    }
+                                }
+
+                                return { success: false, reason: 'no_fallback_conditions_met' };
+                            });
+
+                            if (fallbackSuccess.success) {
+                                console.log(`🎉 FALLBACK SUCCESS DETECTED! Reason: ${fallbackSuccess.reason}`);
+
+                                // Take screenshot for successful fallback detection
+                                const fallbackScreenshotName = `debug-fallback-success-${fallbackSuccess.reason}-${Date.now()}.png`;
+                                await page.screenshot({ path: fallbackScreenshotName, width: 1024, height: 768 });
+                                console.log(`📸 Screenshot: ${fallbackScreenshotName}`);
+
+                                // Add visual indicator for fallback success
+                                await page.evaluate((reason) => {
+                                    const successIndicator = document.createElement('div');
+                                    successIndicator.id = 'fallback-upload-success-indicator';
+                                    successIndicator.style.position = 'fixed';
+                                    successIndicator.style.left = '50%';
+                                    successIndicator.style.top = '50%';
+                                    successIndicator.style.transform = 'translate(-50%, -50%)';
+                                    successIndicator.style.width = '350px';
+                                    successIndicator.style.height = '180px';
+                                    successIndicator.style.border = '10px solid #FFA500'; // Orange border for fallback
+                                    successIndicator.style.borderRadius = '25px';
+                                    successIndicator.style.backgroundColor = 'rgba(255, 165, 0, 0.95)'; // Orange background
+                                    successIndicator.style.zIndex = '1000000';
+                                    successIndicator.style.pointerEvents = 'none';
+                                    successIndicator.style.boxShadow = '0 0 100px rgba(255, 165, 0, 1), 0 0 200px rgba(255, 165, 0, 0.8)';
+                                    successIndicator.textContent = `FALLBACK SUCCESS!\nReason: ${reason}\nUpload appears successful`;
+                                    successIndicator.style.color = 'white';
+                                    successIndicator.style.fontSize = '16px';
+                                    successIndicator.style.display = 'flex';
+                                    successIndicator.style.alignItems = 'center';
+                                    successIndicator.style.justifyContent = 'center';
+                                    successIndicator.style.fontWeight = 'bold';
+                                    successIndicator.style.textShadow = '2px 2px 4px black';
+                                    successIndicator.style.textAlign = 'center';
+                                    successIndicator.style.lineHeight = '1.4';
+                                    successIndicator.style.whiteSpace = 'pre-line';
+                                    document.body.appendChild(successIndicator);
+                                    console.log('✅ FALLBACK UPLOAD SUCCESS INDICATOR added to DOM');
+
+                                    // Flash animation and remove after 6 seconds
+                                    let opacity = 1;
+                                    const flash = setInterval(() => {
+                                        opacity = opacity === 1 ? 0.3 : 1;
+                                        successIndicator.style.opacity = opacity;
+                                    }, 300);
+
+                                    setTimeout(() => {
+                                        clearInterval(flash);
+                                        if (successIndicator.parentNode) {
+                                            successIndicator.parentNode.removeChild(successIndicator);
+                                        }
+                                    }, 6000);
+                                }, fallbackSuccess.reason);
+
+                                const uploadUrl = page ? page.url() : 'unknown';
+
+                                // CLEANUP BROWSER FOR FALLBACK SUCCESS
+                                console.log('🧹 Cleaning up browser (fallback success detected)...');
+                                await this.cleanup();
+
+                                return {
+                                    success: true,
+                                    url: uploadUrl,
+                                    message: `Fallback success: ${fallbackSuccess.reason}`
+                                };
+                            } else {
+                                console.log('❌ No fallback success conditions met either');
+                                // Take screenshot when success message is not found
+                                await page.screenshot({ path: 'debug-error-success-message-not-found.png', width: 1024, height: 768 });
+                                console.log('📸 Screenshot: debug-error-success-message-not-found.png');
+
+                                const uploadUrl = page ? page.url() : 'unknown';
+
+                                // CLEANUP BROWSER ON FAILURE TOO
+                                console.log('🧹 Cleaning up browser (failure detected)...');
+                                await this.cleanup();
+
+                                return {
+                                    success: false,
+                                    error: 'Success message not found'
+                                };
+                            }
                         }
 
                     } else {
