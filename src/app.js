@@ -891,7 +891,7 @@ async function selectVideoFile() {
         // Create a hidden file input for web browser file selection
         const fileInput = document.createElement('input');
         fileInput.type = 'file';
-        fileInput.accept = 'video/*';
+        fileInput.accept = 'video/*,image/*';
         fileInput.style.display = 'none';
 
         fileInput.onchange = async (event) => {
@@ -1263,7 +1263,7 @@ async function selectBulkVideoFiles() {
     try {
         const fileInput = document.createElement('input');
         fileInput.type = 'file';
-        fileInput.accept = 'video/*';
+        fileInput.accept = 'video/*,image/*';
         fileInput.multiple = true;
         fileInput.style.display = 'none';
 

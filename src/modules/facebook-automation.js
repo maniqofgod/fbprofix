@@ -2742,7 +2742,7 @@ if (switchSuccess) {
                                 console.log(`🎉 SUCCESS NOTIFICATION DETECTED! Type: ${successMessage.type}, Message: "${successMessage.message}", Source: ${successMessage.source}`);
 
                                 // Take screenshot when success message is detected
-                                const screenshotName = `debug-success-detected-${successMessage.type}-${Date.now()}.png`;
+                                const screenshotName = `debug-success-detected-${successMessage.type}.png`;
                                 await page.screenshot({ path: screenshotName, width: 1024, height: 768 });
                                 console.log(`📸 Screenshot: ${screenshotName}`);
 
@@ -2866,7 +2866,7 @@ if (switchSuccess) {
                                 console.log(`🎉 FALLBACK SUCCESS DETECTED! Reason: ${fallbackSuccess.reason}`);
 
                                 // Take screenshot for successful fallback detection
-                                const fallbackScreenshotName = `debug-fallback-success-${fallbackSuccess.reason}-${Date.now()}.png`;
+                                const fallbackScreenshotName = `debug-fallback-success-${fallbackSuccess.reason}.png`;
                                 await page.screenshot({ path: fallbackScreenshotName, width: 1024, height: 768 });
                                 console.log(`📸 Screenshot: ${fallbackScreenshotName}`);
 
@@ -2974,6 +2974,1402 @@ if (switchSuccess) {
     }
 
     /**
+     * Upload image sebagai Facebook Reel menggunakan automation element langsung
+     * Parameter uploadData harus berisi:
+     * - cookie: string cookie Facebook
+     * - pageId: ID halaman Facebook
+     * - imagePath: path ke file image
+     * - caption: caption untuk image (opsional)
+     */
+    async uploadImageAsReel(uploadData) {
+        try {
+            // Validate required parameters
+            if (!uploadData) {
+                throw new Error('uploadData is required');
+            }
+            if (!uploadData.cookie) {
+                throw new Error('cookie is required in uploadData');
+            }
+            if (!uploadData.pageId) {
+                throw new Error('pageId is required in uploadData');
+            }
+            if (!uploadData.imagePath) {
+                throw new Error('imagePath is required in uploadData');
+            }
+
+            await this.initialize();
+
+            const page = await this.browser.newPage();
+
+            // Set user agent
+            await page.setUserAgent(
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            );
+
+            // Set Facebook language to Indonesian before setting cookies
+            await this.setFacebookLanguageToIndonesian(page);
+
+            // Set cookies
+            await this.setCookies(page, uploadData.cookie);
+
+            // Navigate to profile page first
+            console.log(`Navigating to profile page: https://www.facebook.com/profile.php?id=${uploadData.pageId}`);
+            await page.goto(`https://www.facebook.com/profile.php?id=${uploadData.pageId}`, { waitUntil: 'networkidle2' });
+
+            // Wait for profile page to load
+            await new Promise(resolve => setTimeout(resolve, 3000));
+
+            // Check if profile loaded successfully
+            const isLoggedIn = await this.checkLoginStatus(page);
+            if (!isLoggedIn) {
+                // Take screenshot before throwing error
+                await page.screenshot({ path: 'debug-auth-failed-profile-not-accessible.png', width: 1024, height: 768 });
+                console.log('📸 Screenshot: debug-auth-failed-profile-not-accessible.png');
+                throw new Error('Authentication failed - profile page not accessible');
+            }
+
+            // Take screenshot after successful login verification
+            await page.screenshot({ path: 'debug-auth-success-profile-accessible.png', width: 1024, height: 768 });
+            console.log('📸 Screenshot: debug-auth-success-profile-accessible.png');
+
+            // Handle switch profile popup if present
+            console.log('Checking for switch profile popup...');
+            const switchSuccess = await this.handleSwitchProfilePopup(page, uploadData.pageId);
+            if (switchSuccess) {
+                console.log('✅ Successfully switched to professional dashboard');
+            } else {
+                console.log('❌ Failed to switch to professional dashboard');
+            }
+
+            // Navigate to reels create
+            console.log('Navigating to Facebook Reels create page...');
+            await page.goto('https://www.facebook.com/reels/create', { waitUntil: 'networkidle2' });
+
+            // Wait for page to load
+            await new Promise(resolve => setTimeout(resolve, 3000));
+
+            // Step 1: Upload image file
+            console.log('Uploading image file...');
+            const fileInputSelectors = [
+                'input[type="file"]',
+                '[data-testid="video-file-input"]',
+                '[data-testid="photo-file-input"]',
+                '.upload-area input[type="file"]'
+            ];
+
+            let fileInput = null;
+            for (const selector of fileInputSelectors) {
+                try {
+                    await page.waitForSelector(selector, { timeout: 5000 });
+                    fileInput = await page.$(selector);
+                    if (fileInput) {
+                        console.log(`Found file input: ${selector}`);
+                        break;
+                    }
+                } catch (error) {
+                    // Continue trying other selectors
+                }
+            }
+
+            if (!fileInput) {
+                // Take screenshot before throwing error
+                await page.screenshot({ path: 'debug-error-file-input-not-found.png', width: 1024, height: 768 });
+                console.log('📸 Screenshot: debug-error-file-input-not-found.png');
+                throw new Error('Image file input not found');
+            }
+
+            // Upload file
+            const imagePath = path.resolve(uploadData.imagePath);
+            if (!fs.existsSync(imagePath)) {
+                throw new Error(`Image file not found: ${imagePath}`);
+            }
+
+            await fileInput.uploadFile(imagePath);
+            console.log('Image file uploaded successfully');
+            await page.screenshot({ path: 'debug-reel-after-image-upload.png' , width: 1024, height: 768 });
+            console.log('📸 Screenshot: debug-reel-after-image-upload.png');
+
+            // Wait for upload to process
+            await new Promise(resolve => setTimeout(resolve, 5000));
+
+            // Input caption
+            const captionInput = await page.$('[contenteditable="true"]');
+            if (captionInput) {
+                // Add visual indicator before click
+                await page.evaluate(() => {
+                    const element = document.querySelector('[contenteditable="true"]');
+                    if (element) {
+                        const rect = element.getBoundingClientRect();
+                        const indicator = document.createElement('div');
+                        indicator.style.position = 'absolute';
+                        indicator.style.left = (rect.left + rect.width / 2 - 15) + 'px';
+                        indicator.style.top = (rect.top + rect.height / 2 - 15) + 'px';
+                        indicator.style.width = '30px';
+                        indicator.style.height = '30px';
+                        indicator.style.border = '3px solid green';
+                        indicator.style.borderRadius = '50%';
+                        indicator.style.backgroundColor = 'rgba(0, 128, 0, 0.5)';
+                        indicator.style.zIndex = '999999';
+                        indicator.style.pointerEvents = 'none';
+                        indicator.textContent = 'CAP';
+                        indicator.style.color = 'white';
+                        indicator.style.fontSize = '8px';
+                        indicator.style.display = 'flex';
+                        indicator.style.alignItems = 'center';
+                        indicator.style.justifyContent = 'center';
+                        indicator.style.fontWeight = 'bold';
+                        document.body.appendChild(indicator);
+                        setTimeout(() => indicator.remove(), 1500);
+                    }
+                });
+                await new Promise(resolve => setTimeout(resolve, 500)); // Give time for indicator to show
+
+                await captionInput.click({ clickCount: 3 });
+                await captionInput.type(uploadData.caption || 'Test image posting');
+                console.log('✅ Caption inputted');
+                await page.screenshot({ path: 'debug-reel-after-caption-input-click.png' , width: 1024, height: 768 });
+                console.log('📸 Screenshot: debug-reel-after-caption-input-click.png');
+            }
+
+            // Click first next button at (228, 903)
+            console.log('🎯 Adding visual indicator for FIRST NEXT at (228, 903)...');
+            await page.evaluate(() => {
+                const indicator = document.createElement('div');
+                indicator.id = 'first-next-indicator';
+                indicator.style.position = 'fixed';
+                indicator.style.left = '208px';
+                indicator.style.top = '818px';
+                indicator.style.width = '40px';
+                indicator.style.height = '40px';
+                indicator.style.border = '3px solid blue';
+                indicator.style.borderRadius = '50%';
+                indicator.style.backgroundColor = 'rgba(0, 0, 255, 0.7)';
+                indicator.style.zIndex = '999999';
+                indicator.style.pointerEvents = 'none';
+                indicator.style.boxShadow = '0 0 15px rgba(0, 0, 255, 0.9)';
+                indicator.textContent = 'NEXT';
+                indicator.style.color = 'white';
+                indicator.style.fontSize = '10px';
+                indicator.style.display = 'flex';
+                indicator.style.alignItems = 'center';
+                indicator.style.justifyContent = 'center';
+                indicator.style.fontWeight = 'bold';
+                document.body.appendChild(indicator);
+
+                setTimeout(() => {
+                    if (indicator.parentNode) {
+                        indicator.parentNode.removeChild(indicator);
+                    }
+                }, 2000);
+            });
+
+            console.log('🎯 Clicking first next at (228, 903)');
+            await page.mouse.click(228, 903);
+            await page.screenshot({ path: 'debug-reel-after-first-next-click.png' , width: 1024, height: 768 });
+            console.log('📸 Screenshot: debug-reel-after-first-next-click.png');
+            await new Promise(resolve => setTimeout(resolve, 3000));
+
+            // Click second next
+            console.log('🎯 Adding visual indicator for SECOND NEXT at (300, 903)...');
+            await page.evaluate(() => {
+                const indicator = document.createElement('div');
+                indicator.id = 'second-next-indicator';
+                indicator.style.position = 'fixed';
+                indicator.style.left = '280px';
+                indicator.style.top = '818px';
+                indicator.style.width = '40px';
+                indicator.style.height = '40px';
+                indicator.style.border = '3px solid orange';
+                indicator.style.borderRadius = '50%';
+                indicator.style.backgroundColor = 'rgba(255, 165, 0, 0.7)';
+                indicator.style.zIndex = '999999';
+                indicator.style.pointerEvents = 'none';
+                indicator.style.boxShadow = '0 0 15px rgba(255, 165, 0, 0.9)';
+                indicator.textContent = 'NEXT2';
+                indicator.style.color = 'white';
+                indicator.style.fontSize = '9px';
+                indicator.style.display = 'flex';
+                indicator.style.alignItems = 'center';
+                indicator.style.justifyContent = 'center';
+                indicator.style.fontWeight = 'bold';
+                document.body.appendChild(indicator);
+
+                setTimeout(() => {
+                    if (indicator.parentNode) {
+                        indicator.parentNode.removeChild(indicator);
+                    }
+                }, 2000);
+            });
+
+            console.log('🎯 Clicking second next at (300, 903)');
+            await page.mouse.click(300, 903);
+            await page.screenshot({ path: 'debug-reel-after-second-next-click.png' , width: 1024, height: 768 });
+            console.log('📸 Screenshot: debug-reel-after-second-next-click.png');
+            await new Promise(resolve => setTimeout(resolve, 10000));
+
+            // Take screenshot before posting
+            await page.screenshot({ path: 'debug-700-615-before.png' , width: 1024, height: 768 });
+            console.log('📸 Screenshot before posting: debug-700-615-before.png');
+
+            // Click posting button
+            console.log('🎯 Adding visual indicator for POSTING BUTTON at (650, 830)...');
+            await page.evaluate(() => {
+                const indicator = document.createElement('div');
+                indicator.id = 'posting-indicator';
+                indicator.style.position = 'fixed';
+                indicator.style.left = '620px';
+                indicator.style.top = '810px';
+                indicator.style.width = '60px';
+                indicator.style.height = '60px';
+                indicator.style.border = '5px solid #FF0000';
+                indicator.style.borderRadius = '50%';
+                indicator.style.backgroundColor = 'rgba(255, 0, 0, 0.9)';
+                indicator.style.zIndex = '999999';
+                indicator.style.pointerEvents = 'none';
+                indicator.style.boxShadow = '0 0 30px rgba(255, 0, 0, 1), 0 0 60px rgba(255, 0, 0, 0.8), inset 0 0 20px rgba(255, 255, 255, 0.3)';
+                indicator.textContent = 'POSTING';
+                indicator.style.color = 'white';
+                indicator.style.fontSize = '12px';
+                indicator.style.display = 'flex';
+                indicator.style.alignItems = 'center';
+                indicator.style.justifyContent = 'center';
+                indicator.style.fontWeight = 'bold';
+                indicator.style.textShadow = '1px 1px 2px black';
+                document.body.appendChild(indicator);
+
+                // Add pulsating animation
+                let scale = 1;
+                const pulse = setInterval(() => {
+                    scale = scale === 1 ? 1.1 : 1;
+                    indicator.style.transform = `scale(${scale})`;
+                }, 200);
+
+                setTimeout(() => {
+                    clearInterval(pulse);
+                    if (indicator.parentNode) {
+                        indicator.parentNode.removeChild(indicator);
+                    }
+                }, 3000);
+            });
+
+            console.log('🎯 Clicking posting button at (650, 840)');
+            await page.mouse.click(650, 840);
+            console.log('✅ Posting button clicked at (650, 840)');
+
+            // Wait for success message after posting
+            console.log('Menunggu pesan sukses...');
+            let successMessage = { found: false };
+            let attempts = 2;
+            const maxAttempts = 20; // 30 detik total (15 x 2 detik)
+
+            while (!successMessage.found && attempts < maxAttempts) {
+                            successMessage = await page.evaluate(() => {
+                                const allText = document.body.textContent || '';
+                                const allHTML = document.body.innerHTML || '';
+                                const successTexts = [
+                                    'Reel Anda sedang diproses',
+                                    'Kami akan memberi tahu Anda',
+                                    'reel siap dilihat',
+                                    'Reel Anda Siap Di Lihat',
+                                    'Reel Anda Siap dilihat',
+                                    'Your reel is being processed',
+                                    'We will let you know',
+                                    'Reel siap dilihat',
+                                    'reel Anda siap dilihat',
+                                    'Reel siap untuk dilihat',
+                                    'Notifikasi Baru',
+                                    'notifikasi baru',
+                                    'New Notification',
+                                    'new notification'
+                                ];
+
+                                // Check in main page content
+                                for (const text of successTexts) {
+                                    if (allText.includes(text)) {
+                                        console.log(`✅ Found success text in page content: "${text}"`);
+                                        return { found: true, message: text, source: 'page_content' };
+                                    }
+                                }
+
+                                // Check in modal dialogs and overlays
+                                const modalElements = document.querySelectorAll('[role="dialog"], [role="modal"], .modal, .popup, .overlay, [data-testid*="modal"], [data-testid*="dialog"]');
+                                for (const modal of modalElements) {
+                                    const modalText = modal.textContent || '';
+                                    for (const text of successTexts) {
+                                        if (modalText.includes(text)) {
+                                            console.log(`✅ Found success text in modal: "${text}"`);
+                                            return { found: true, message: text, source: 'modal' };
+                                        }
+                                    }
+                                }
+
+                                // Check in notification elements
+                                const notificationElements = document.querySelectorAll('[role="alert"], [data-testid*="toast"], [data-testid*="notification"], .notification, .toast, .snackbar, [aria-label*="notification"], [aria-label*="notifikasi"]');
+                                for (const notification of notificationElements) {
+                                    const notificationText = notification.textContent || '';
+                                    for (const text of successTexts) {
+                                        if (notificationText.includes(text)) {
+                                            console.log(`✅ Found success text in notification: "${text}"`);
+                                            return { found: true, message: text, source: 'notification' };
+                                        }
+                                    }
+                                }
+
+                                // Check for browser notification permission or notification-related elements
+                                const notificationPermission = window.Notification && window.Notification.permission;
+                                if (notificationPermission === 'granted') {
+                                    // Look for notification-related UI elements
+                                    const notificationUI = document.querySelectorAll('[aria-label*="notification"], [aria-label*="notifikasi"], button[aria-label*="notification"], button[aria-label*="notifikasi"]');
+                                    for (const element of notificationUI) {
+                                        const elementText = element.textContent || '';
+                                        for (const text of successTexts) {
+                                            if (elementText.includes(text)) {
+                                                console.log(`✅ Found success text in notification UI: "${text}"`);
+                                                return { found: true, message: text, source: 'notification_ui' };
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Check for any element containing "Notifikasi" or "Notification"
+                                const notifikasiElements = document.querySelectorAll('*');
+                                for (const element of notifikasiElements) {
+                                    const elementText = (element.textContent || '').toLowerCase();
+                                    if (elementText.includes('notifikasi') || elementText.includes('notification')) {
+                                        // Check if this element also contains success-related text
+                                        for (const text of successTexts) {
+                                            if (elementText.includes(text.toLowerCase())) {
+                                                console.log(`✅ Found success text in element with notification: "${text}"`);
+                                                return { found: true, message: text, source: 'element_with_notification' };
+                                            }
+                                        }
+                                        // If we find any notification element, consider it a potential success indicator
+                                        console.log(`📢 Found notification element: "${element.textContent?.trim()}"`);
+                                        return { found: true, message: 'Notification element detected', source: 'notification_element' };
+                                    }
+                                }
+
+                                return { found: false };
+                            });
+
+                if (!successMessage.found) {
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    attempts++;
+                }
+            }
+
+            if (successMessage.found) {
+                const uploadUrl = page ? page.url() : 'unknown';
+                await this.cleanup(page);
+                return {
+                    success: true,
+                    url: uploadUrl,
+                    message: successMessage.message
+                };
+            } else {
+                const uploadUrl = page ? page.url() : 'unknown';
+                await this.cleanup(page);
+                return {
+                    success: false,
+                    error: 'Success message not found'
+                };
+            }
+
+        } catch (error) {
+            console.error('Error uploading image as reel:', error);
+            const uploadUrl = page ? page.url() : 'unknown';
+            await this.cleanup(page);
+            return {
+                success: false,
+                error: `Image reel upload failed: ${error.message}`
+            };
+        }
+    }
+
+    /**
+     * Upload image sebagai Post menggunakan automation element langsung
+     * Parameter uploadData harus berisi:
+     * - cookie: string cookie Facebook
+     * - pageId: ID halaman Facebook
+     * - imagePath: path ke file image
+     * - caption: caption untuk image (opsional)
+     */
+    async uploadImageAsPost(uploadData) {
+        let page = null;
+        try {
+            // Validate required parameters
+            if (!uploadData) {
+                throw new Error('uploadData is required');
+            }
+            if (!uploadData.cookie) {
+                throw new Error('cookie is required in uploadData');
+            }
+            if (!uploadData.pageId) {
+                throw new Error('pageId is required in uploadData');
+            }
+            if (!uploadData.imagePath) {
+                throw new Error('imagePath is required in uploadData');
+            }
+
+            await this.initialize();
+
+            page = await this.browser.newPage();
+
+            // Set user agent
+            await page.setUserAgent(
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            );
+
+            // Set Facebook language to Indonesian before setting cookies
+            await this.setFacebookLanguageToIndonesian(page);
+
+            // Set cookies
+            await this.setCookies(page, uploadData.cookie);
+
+            // Navigate ke profile page
+            console.log(`Navigating to profile page: https://www.facebook.com/profile.php?id=${uploadData.pageId}`);
+            await page.goto(`https://www.facebook.com/profile.php?id=${uploadData.pageId}`, {
+                waitUntil: 'networkidle2',
+                timeout: 30000
+            });
+
+            // Wait for profile page to load
+            await new Promise(resolve => setTimeout(resolve, 3000));
+
+            // Check if profile loaded successfully
+            const isLoggedIn = await this.checkLoginStatus(page);
+            if (!isLoggedIn) {
+                throw new Error('Authentication failed - profile page not accessible');
+            }
+
+            // Handle switch profile popup if present
+            console.log('Checking for switch profile popup...');
+            const switchSuccess = await this.handleSwitchProfilePopup(page, uploadData.pageId);
+            if (switchSuccess) {
+                console.log('✅ Successfully switched to professional dashboard');
+            } else {
+                console.log('❌ Failed to switch to professional dashboard');
+            }
+
+            // Navigate ke main Facebook
+            console.log('Navigating to Facebook main page...');
+            await page.goto('https://www.facebook.com/', {
+                waitUntil: 'networkidle2',
+                timeout: 30000
+            });
+
+            // Wait for page to load
+            await new Promise(resolve => setTimeout(resolve, 3000));
+
+            // Step 1: Find and click the "What's on your mind?" or photo/video upload area
+            console.log('Looking for post creation area...');
+            const postCreationSelectors = [
+                '[data-testid="status-attachment-photo"]',
+                '[data-testid="status-attachment-video"]',
+                '[aria-label="Photo/Video"]',
+                '[aria-label="Foto/Video"]',
+                'input[type="file"]',
+                '.post-creation-area'
+            ];
+
+            let postArea = null;
+            for (const selector of postCreationSelectors) {
+                try {
+                    await page.waitForSelector(selector, { timeout: 5000 });
+                    postArea = await page.$(selector);
+                    if (postArea) {
+                        console.log(`Found post creation area: ${selector}`);
+
+                        // Add visual indicator before click
+                        await page.evaluate((sel) => {
+                            const element = document.querySelector(sel);
+                            if (element) {
+                                const rect = element.getBoundingClientRect();
+                                const indicator = document.createElement('div');
+                                indicator.style.position = 'absolute';
+                                indicator.style.left = (rect.left + rect.width / 2 - 15) + 'px';
+                                indicator.style.top = (rect.top + rect.height / 2 - 15) + 'px';
+                                indicator.style.width = '30px';
+                                indicator.style.height = '30px';
+                                indicator.style.border = '3px solid cyan';
+                                indicator.style.borderRadius = '50%';
+                                indicator.style.backgroundColor = 'rgba(0, 255, 255, 0.5)';
+                                indicator.style.zIndex = '999999';
+                                indicator.style.pointerEvents = 'none';
+                                indicator.textContent = 'POST';
+                                indicator.style.color = 'black';
+                                indicator.style.fontSize = '8px';
+                                indicator.style.display = 'flex';
+                                indicator.style.alignItems = 'center';
+                                indicator.style.justifyContent = 'center';
+                                indicator.style.fontWeight = 'bold';
+                                document.body.appendChild(indicator);
+                                setTimeout(() => indicator.remove(), 1500);
+                            }
+                        }, selector);
+                        await new Promise(resolve => setTimeout(resolve, 500)); // Give time for indicator to show
+
+                        await postArea.click();
+                        console.log(`✅ Clicked post creation area: ${selector}`);
+                        await page.screenshot({ path: `debug-post-creation-click-${selector.replace(/[^a-zA-Z0-9]/g, '_')}.png` });
+                        console.log(`📸 Screenshot: debug-post-creation-click-${selector.replace(/[^a-zA-Z0-9]/g, '_')}.png`);
+                        break;
+                    }
+                } catch (error) {
+                    // Continue trying other selectors
+                }
+            }
+
+            if (!postArea) {
+                // Fallback: look for any clickable element that might open file upload
+                console.log('Post area not found, trying fallback...');
+                const fallbackClicked = await page.evaluate(() => {
+                    const elements = Array.from(document.querySelectorAll('[role="button"], button, div[tabindex]'));
+                    const uploadBtn = elements.find(el =>
+                        el.textContent?.includes('Photo') ||
+                        el.textContent?.includes('Video') ||
+                        el.textContent?.includes('Foto') ||
+                        el.getAttribute('aria-label')?.includes('Photo') ||
+                        el.getAttribute('aria-label')?.includes('Video')
+                    );
+                    if (uploadBtn) {
+                        const rect = uploadBtn.getBoundingClientRect();
+                        const indicator = document.createElement('div');
+                        indicator.style.position = 'absolute';
+                        indicator.style.left = (rect.left + rect.width / 2 - 15) + 'px';
+                        indicator.style.top = (rect.top + rect.height / 2 - 15) + 'px';
+                        indicator.style.width = '30px';
+                        indicator.style.height = '30px';
+                        indicator.style.border = '3px solid cyan';
+                        indicator.style.borderRadius = '50%';
+                        indicator.style.backgroundColor = 'rgba(0, 255, 255, 0.5)';
+                        indicator.style.zIndex = '999999';
+                        indicator.style.pointerEvents = 'none';
+                        indicator.textContent = 'FALL';
+                        indicator.style.color = 'black';
+                        indicator.style.fontSize = '8px';
+                        indicator.style.display = 'flex';
+                        indicator.style.alignItems = 'center';
+                        indicator.style.justifyContent = 'center';
+                        indicator.style.fontWeight = 'bold';
+                        document.body.appendChild(indicator);
+                        setTimeout(() => indicator.remove(), 1500);
+
+                        uploadBtn.click();
+                        return true;
+                    }
+                    return false;
+                });
+                if (fallbackClicked) {
+                    console.log('✅ Clicked fallback post creation button.');
+                    await new Promise(resolve => setTimeout(resolve, 500)); // Give time for indicator to show
+                    await page.screenshot({ path: 'debug-post-creation-fallback-click.png' , width: 1024, height: 768 });
+                    console.log('📸 Screenshot: debug-post-creation-fallback-click.png');
+                } else {
+                    throw new Error('Post creation area not found');
+                }
+                await new Promise(resolve => setTimeout(resolve, 2000));
+            }
+
+            // Step 2: Upload image file
+            console.log('Uploading image file...');
+
+            // Clean start
+            await page.evaluateOnNewDocument(() => {
+                console.log('Starting clean...');
+            });
+
+            const fileInputSelectors = [
+                'input[type="file"]',
+                '[data-testid="video-file-input"]',
+                '[data-testid="photo-file-input"]',
+                '.upload-input'
+            ];
+
+            let fileInput = null;
+            for (const selector of fileInputSelectors) {
+                try {
+                    await page.waitForSelector(selector, { timeout: 5000 });
+                    fileInput = await page.$(selector);
+                    if (fileInput) {
+                        console.log(`Found file input: ${selector}`);
+                        break;
+                    }
+                } catch (error) {
+                    // Continue trying other selectors
+                }
+            }
+
+            if (!fileInput) {
+                throw new Error('Image file input not found');
+            }
+
+            // Upload file
+            const imagePath = path.resolve(uploadData.imagePath);
+            if (!fs.existsSync(imagePath)) {
+                throw new Error(`Image file not found: ${imagePath}`);
+            }
+
+            await fileInput.uploadFile(imagePath);
+            console.log('Image file uploaded successfully');
+            await page.screenshot({ path: 'debug-post-after-image-upload.png' , width: 1024, height: 768 });
+            console.log('📸 Screenshot: debug-post-after-image-upload.png');
+
+            // Step 3: Wait for upload processing, input caption FIRST, then click "Berikutnya" button
+            console.log('Waiting for image processing, then inputting caption and clicking "Berikutnya" button...');
+
+            // Wait longer for image upload processing and modal to fully load
+            console.log('⏳ Waiting longer for image processing and modal stability...');
+            await new Promise(resolve => setTimeout(resolve, 8000)); // Increased from 3000 to 8000
+
+            // Wait for upload to be ready (look for image thumbnail or processing indicators)
+            console.log('🔍 Waiting for image processing to complete...');
+            let processingComplete = false;
+            let attempts = 0;
+            const maxAttempts = 10; // 10 attempts * 2s = 20s max wait
+
+            while (!processingComplete && attempts < maxAttempts) {
+                console.log(`🔄 Checking upload status (attempt ${attempts + 1}/${maxAttempts})...`);
+
+                processingComplete = await page.evaluate(() => {
+                    // Check for image thumbnail (indicates processing is done)
+                    const imageThumbs = document.querySelectorAll('img[src*="photo"], img[src*="image"], [data-visualcompletion="media-vc"]');
+
+                    // Check for compose form elements that indicate next step is ready
+                    const composeElements = document.querySelectorAll('[contenteditable="true"], [aria-label*="caption"], [aria-label*="deskripsi"]');
+
+                    // Check if buttons are available (indicating modal loaded)
+                    const buttons = document.querySelectorAll('button, [role="button"]');
+                    const hasNextButtons = Array.from(buttons).some(btn =>
+                        btn.textContent?.includes('Berikutnya') ||
+                        btn.textContent?.includes('Next') ||
+                        btn.textContent?.includes('Lanjutkan') ||
+                        btn.getAttribute('aria-label')?.includes('Berikutnya')
+                    );
+
+                    console.log(`📊 Processing check: thumbs=${imageThumbs.length}, compose=${composeElements.length}, buttons=${buttons.length}, nextBtn=${hasNextButtons}`);
+
+                    // Consider processing complete if we have image elements AND buttons
+                    return imageThumbs.length > 0 && composeElements.length > 0 && hasNextButtons;
+                });
+
+                if (!processingComplete) {
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    attempts++;
+                }
+            }
+
+            if (!processingComplete) {
+                console.log('⚠️ Image processing check failed, proceeding anyway...');
+                // Take screenshot when processing check fails
+                await page.screenshot({ path: 'debug-error-image-processing-failed.png', width: 1024, height: 768 });
+                console.log('📸 Screenshot: debug-error-image-processing-failed.png');
+            } else {
+                console.log('✅ Image processing complete, modal ready for caption input');
+            }
+
+            // INPUT CAPTION FIRST (before "Berikutnya" button click)
+            console.log('Inputting caption BEFORE "Berikutnya" button click...');
+
+            // Wait a bit more for the caption input to fully render
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            // Try to find the caption input field that appears before "Berikutnya"
+            // For Facebook posts, the caption input might be available immediately after upload
+            let captionInput = await page.$('[contenteditable="true"]');
+            let captionFound = false;
+
+            if (captionInput) {
+                console.log('Found contenteditable caption input');
+                captionFound = true;
+            } else {
+                // Try other common caption input selectors
+                const captionSelectors = [
+                    '[aria-label="Apa yang Anda pikirkan?"]',
+                    '[aria-label="What\'s on your mind?"]',
+                    '[aria-label="Deskripsikan gambar Anda"]',
+                    '[aria-label="Describe your image"]',
+                    '[placeholder*="caption"]',
+                    '[placeholder*="deskripsi"]'
+                ];
+
+                for (const selector of captionSelectors) {
+                    try {
+                        captionInput = await page.$(selector);
+                        if (captionInput) {
+                            console.log(`Found caption input with selector: ${selector}`);
+                            captionFound = true;
+                            break;
+                        }
+                    } catch (e) {
+                        // Continue
+                    }
+                }
+            }
+
+            if (captionFound && captionInput) {
+                // Add visual indicator before click
+                await page.evaluate(() => {
+                    const element = document.querySelector('[contenteditable="true"]');
+                    if (element) {
+                        const rect = element.getBoundingClientRect();
+                        const indicator = document.createElement('div');
+                        indicator.style.position = 'absolute';
+                        indicator.style.left = (rect.left + rect.width / 2 - 15) + 'px';
+                        indicator.style.top = (rect.top + rect.height / 2 - 15) + 'px';
+                        indicator.style.width = '30px';
+                        indicator.style.height = '30px';
+                        indicator.style.border = '3px solid green';
+                        indicator.style.borderRadius = '50%';
+                        indicator.style.backgroundColor = 'rgba(0, 128, 0, 0.5)';
+                        indicator.style.zIndex = '999999';
+                        indicator.style.pointerEvents = 'none';
+                        indicator.textContent = 'CAP';
+                        indicator.style.color = 'white';
+                        indicator.style.fontSize = '8px';
+                        indicator.style.display = 'flex';
+                        indicator.style.alignItems = 'center';
+                        indicator.style.justifyContent = 'center';
+                        indicator.style.fontWeight = 'bold';
+                        document.body.appendChild(indicator);
+                        setTimeout(() => indicator.remove(), 1500);
+                    }
+                });
+                await new Promise(resolve => setTimeout(resolve, 500)); // Give time for indicator to show
+
+                // Click to focus and clear existing content
+                await captionInput.click({ clickCount: 1 });
+                await new Promise(resolve => setTimeout(resolve, 500));
+
+                // Clear any existing content
+                await page.keyboard.press('End');
+                await page.keyboard.down('Shift');
+                await page.keyboard.press('Home');
+                await page.keyboard.up('Shift');
+                await page.keyboard.press('Backspace');
+
+                // Now input the caption
+                await page.keyboard.type(uploadData.caption || 'Uploaded via automation');
+                console.log('✅ Caption inputted BEFORE "Berikutnya" button click');
+                await page.screenshot({ path: 'debug-post-after-caption-input-click.png' , width: 1024, height: 768 });
+                console.log('📸 Screenshot: debug-post-after-caption-input-click.png');
+
+                // Trigger change events
+                await page.evaluate(() => {
+                    const inputs = document.querySelectorAll('[contenteditable="true"]');
+                    inputs.forEach(input => {
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                    });
+                });
+            } else {
+                console.log('⚠️ Caption input not found before "Berikutnya", will try after click');
+            }
+
+            console.log('Now proceeding to click "Berikutnya" button...');
+
+            console.log('Clicking "Berikutnya" button using element click...');
+
+            // IMPLEMENT ENHANCED NEXT BUTTON CLICKING LOGIC
+            let nextBtnElement = null;
+            let nextBtnFound = false;
+            let nextBtnCoords = null;
+
+            // Try to find and click the "Berikutnya" button directly via element
+            try {
+                // First try: Look for button with specific text using page.evaluate
+                nextBtnFound = await page.evaluate(() => {
+                    const allButtons = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"], span[role="button"]'));
+
+                    console.log(`🔍 Found ${allButtons.length} clickable elements for next element click`);
+
+                    // Find button with "Berikutnya" text and click it directly
+                    const nextBtn = allButtons.find(btn => {
+                        const text = btn.textContent?.trim() || '';
+                        const ariaLabel = btn.getAttribute('aria-label') || '';
+                        return text.includes('Berikutnya') ||
+                               text.includes('Next') ||
+                               text.includes('Selanjutnya') ||
+                               ariaLabel.includes('Berikutnya') ||
+                               ariaLabel.includes('Next');
+                    });
+
+                    if (nextBtn) {
+                        console.log('✅ Found next button by text:', nextBtn.textContent?.trim());
+                        const rect = nextBtn.getBoundingClientRect();
+                        const x = rect.left + rect.width / 2;
+                        const y = rect.top + rect.height / 2;
+
+                        console.log(`📍 Next button coordinates: (${Math.round(x)}, ${Math.round(y)})`);
+
+                        return { success: true, coords: { x, y } };
+                    }
+
+                    return { success: false };
+                });
+
+                if (nextBtnFound && nextBtnFound.success) {
+                    nextBtnCoords = nextBtnFound.coords;
+                    // Add visual indicator before click
+                    console.log(`🎯 BERIKUTNYA button found at coordinates: (${Math.round(nextBtnCoords.x)}, ${Math.round(nextBtnCoords.y)})`);
+
+                    console.log('🟥 Adding visual indicator for BERIKUTNYA...');
+                    await page.evaluate((x, y) => {
+                        const indicator = document.createElement('div');
+                        indicator.id = 'berikutnya-indicator';
+                        indicator.style.position = 'fixed';
+                        indicator.style.left = (x - 25) + 'px';
+                        indicator.style.top = (y - 25) + 'px';
+                        indicator.style.width = '50px';
+                        indicator.style.height = '50px';
+                        indicator.style.border = '4px solid red';
+                        indicator.style.borderRadius = '50%';
+                        indicator.style.backgroundColor = 'rgba(255, 0, 0, 0.8)';
+                        indicator.style.zIndex = '999999';
+                        indicator.style.pointerEvents = 'none';
+                        indicator.style.boxShadow = '0 0 20px rgba(255, 0, 0, 1)';
+                        indicator.textContent = 'BERIKUTNYA';
+                        indicator.style.color = 'white';
+                        indicator.style.fontSize = '10px';
+                        indicator.style.display = 'flex';
+                        indicator.style.alignItems = 'center';
+                        indicator.style.justifyContent = 'center';
+                        indicator.style.fontWeight = 'bold';
+                        document.body.appendChild(indicator);
+                        console.log('🔴 BERIKUTNYA indicator added to DOM');
+
+                        // Simple indicator - remove after 5 seconds
+                        setTimeout(() => {
+                            if (indicator.parentNode) {
+                                indicator.parentNode.removeChild(indicator);
+                            }
+                        }, 5000);
+                    }, nextBtnCoords.x, nextBtnCoords.y);
+
+                    // Wait for visual indicator to be visible
+                    console.log('📱 Waiting 5 seconds for visual indicator...');
+                    await new Promise(resolve => setTimeout(resolve, 5000));
+
+                    // Now click the button - this should happen after the visual flash
+                    const clickResult = await page.evaluate(() => {
+                        const allButtons = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"], span[role="button"]'));
+
+                        // Find the button again and click it
+                        const nextBtn = allButtons.find(btn => {
+                            const text = btn.textContent?.trim() || '';
+                            const ariaLabel = btn.getAttribute('aria-label') || '';
+                            return text.includes('Berikutnya') ||
+                                   text.includes('Next') ||
+                                   text.includes('Selanjutnya') ||
+                                   ariaLabel.includes('Berikutnya') ||
+                                   ariaLabel.includes('Next');
+                        });
+
+                        if (nextBtn) {
+                            nextBtn.click();
+                            return { clicked: true, text: nextBtn.textContent?.trim() };
+                        }
+
+                        return { clicked: false };
+                    });
+
+                    if (clickResult.clicked) {
+                        console.log(`✅ SUCCESS! Element clicked "Berikutnya" button: "${clickResult.text}"`);
+                        await page.screenshot({ path: 'debug-post-after-berikutnya-click.png' , width: 1024, height: 768 });
+                        console.log('📸 Screenshot: debug-post-after-berikutnya-click.png');
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                    } else {
+                        console.log('❌ FAILED: Could not click "Berikutnya" button');
+                        throw new Error('Could not click the "Berikutnya" button');
+                    }
+
+                } else {
+                    console.log('❌ Failed to find "Berikutnya" button');
+                    throw new Error('Could not find the "Berikutnya" button');
+                }
+
+            } catch (error) {
+                console.log('❌ Error during "Berikutnya" click:', error.message);
+                throw error;
+            }
+
+            // CONTINUE TO "Kirim" BUTTON - "Berikutnya" clicked successfully
+            console.log('🎯 "BERIKUTNYA" BUTTON FUNCTIONALITY COMPLETE');
+            console.log('🔄 Now proceeding to click "KIRIM" (Post/Send) button...');
+
+            // Wait for the "Kirim" button to appear after "Berikutnya" click
+            await new Promise(resolve => setTimeout(resolve, 3000));
+
+            // Step 4: Click "Kirim" button using enhanced approach
+            console.log('Clicking "Kirim" button using element click...');
+
+            // IMPLEMENT ENHANCED "KIRIM" BUTTON CLICKING LOGIC
+            let kirimBtnFound = false;
+            let kirimBtnCoords = null;
+
+            // Try to find and click the "Kirim" button directly via element
+            try {
+                // First try: Look for button with specific Post/Send related text
+                kirimBtnFound = await page.evaluate(() => {
+                    const allButtons = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"], span[role="button"]'));
+
+                    console.log(`🔍 Found ${allButtons.length} clickable elements for Kirim button click`);
+
+                    // Find button with ONLY "Kirim" text (strict exclusion of Bagikan/Share/English)
+                    const kirimBtn = allButtons.find(btn => {
+                        const text = btn.textContent?.trim() || '';
+                        const ariaLabel = btn.getAttribute('aria-label') || '';
+
+                        // STRICT CHECK: Must contain Kirim/Kirimkan AND NOT contain Bagikan/Share/English
+                        const hasKirimOnly = (
+                            text === 'Kirim' ||
+                            text.includes('Kirim') ||
+                            text.includes('Kirimkan') ||
+                            ariaLabel.includes('Kirim') ||
+                            ariaLabel.includes('Kirimkan')
+                        ) && !text.includes('Bagikan') &&
+                          !text.includes('Share') &&
+                          !text.includes('Post') &&
+                          !text.includes('Send');
+
+                        return hasKirimOnly;
+                    });
+
+                    if (kirimBtn) {
+                        console.log('✅ Found Kirim button by text:', kirimBtn.textContent?.trim());
+                        const rect = kirimBtn.getBoundingClientRect();
+                        const x = rect.left + rect.width / 2;
+                        const y = rect.top + rect.height / 2;
+
+                        console.log(`📍 Kirim button coordinates: (${Math.round(x)}, ${Math.round(y)})`);
+
+                        return { success: true, coords: { x, y }, text: kirimBtn.textContent?.trim() };
+                    }
+
+                    return { success: false };
+                });
+
+                if (kirimBtnFound && kirimBtnFound.success) {
+                    kirimBtnCoords = kirimBtnFound.coords;
+                    // Add visual indicator for "Kirim" button
+                    console.log(`🎯 KIRIM button found at coordinates: (${Math.round(kirimBtnCoords.x)}, ${Math.round(kirimBtnCoords.y)})`);
+
+                    console.log('🟢 Adding visual indicator for KIRIM...');
+                    await page.evaluate((x, y) => {
+                        const indicator = document.createElement('div');
+                        indicator.id = 'kirim-indicator';
+                        indicator.style.position = 'fixed';
+                        indicator.style.left = (x - 30) + 'px';
+                        indicator.style.top = (y - 30) + 'px';
+                        indicator.style.width = '60px';
+                        indicator.style.height = '60px';
+                        indicator.style.border = '4px solid green';
+                        indicator.style.borderRadius = '50%';
+                        indicator.style.backgroundColor = 'rgba(0, 128, 0, 0.8)';
+                        indicator.style.zIndex = '999999';
+                        indicator.style.pointerEvents = 'none';
+                        indicator.style.boxShadow = '0 0 30px rgba(0, 128, 0, 1)';
+                        indicator.textContent = 'KIRIM';
+                        indicator.style.color = 'white';
+                        indicator.style.fontSize = '12px';
+                        indicator.style.display = 'flex';
+                        indicator.style.alignItems = 'center';
+                        indicator.style.justifyContent = 'center';
+                        indicator.style.fontWeight = 'bold';
+                        document.body.appendChild(indicator);
+                        console.log('🟢 KIRIM indicator added to DOM');
+
+                        // Remove indicator after 3 seconds
+                        setTimeout(() => {
+                            if (indicator.parentNode) {
+                                indicator.parentNode.removeChild(indicator);
+                            }
+                        }, 3000);
+                    }, kirimBtnCoords.x, kirimBtnCoords.y);
+
+                    // Wait for visual indicator to be visible
+                    console.log('⏳ Waiting 2 seconds for visual indicator...');
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+
+                    // Now click the button using element click
+                    console.log(`🖱️ Clicking KIRIM button at coordinates (${Math.round(kirimBtnCoords.x)}, ${Math.round(kirimBtnCoords.y)})...`);
+
+                    const clickResult = await page.evaluate(() => {
+                        const allButtons = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"], span[role="button"]'));
+
+                        // Find the button again and click it - STRICT EXCLUSION of Bagikan/Share/English
+                        const kirimBtn = allButtons.find(btn => {
+                            const text = btn.textContent?.trim() || '';
+                            const ariaLabel = btn.getAttribute('aria-label') || '';
+
+                            // STRICT: Must have Kirim AND NOT have Bagikan/Share/English words
+                            const hasKirimOnly = (text.includes('Kirim') || text.includes('Kirimkan') || ariaLabel.includes('Kirim') || ariaLabel.includes('Kirimkan')) &&
+                                               !text.includes('Bagikan') &&
+                                               !text.includes('Share') &&
+                                               !text.includes('Post') &&
+                                               !text.includes('Send');
+
+                            return hasKirimOnly;
+                        });
+
+                        if (kirimBtn) {
+                            kirimBtn.click();
+                            return { clicked: true, text: kirimBtn.textContent?.trim() };
+                        }
+
+                        return { clicked: false };
+                    });
+
+                    if (clickResult.clicked) {
+                        console.log(`✅ SUCCESS! Element clicked "Kirim" button: "${clickResult.text}"`);
+                        await page.screenshot({ path: 'debug-post-after-kirim-click.png' , width: 1024, height: 768 });
+                        console.log('📸 Screenshot: debug-post-after-kirim-click.png');
+
+                        // Wait for success message after posting
+                        console.log('Menunggu pesan sukses...');
+                        let successMessage = { found: false };
+                        let attempts = 0;
+                        const maxAttempts = 20;
+
+                        while (!successMessage.found && attempts < maxAttempts) {
+                            console.log(`🔄 Checking for success notifications... (attempt ${attempts + 1}/${maxAttempts})`);
+
+                            successMessage = await page.evaluate(() => {
+                                const allText = document.body.textContent || '';
+                                const allHTML = document.body.innerHTML || '';
+
+                                // COMPREHENSIVE SUCCESS TEXTS FOR IMAGE POSTS - ENHANCED
+                                const successTexts = [
+                                    'Postingan Anda sedang diproses',
+                                    'Kami akan memberi tahu Anda',
+                                    'Reel Anda Siap dilihat',
+                                    'postingan siap untuk dilihat',
+                                    'Bagikan Kepada Pengikut',
+                                    'Postingan Anda berhasil',
+                                    'Post telah dibagikan',
+                                    'Postingan Anda sedang diproses', // Exact match
+                                    'kami akan memberi tahu Anda', // lowercase
+                                    'postingan siap untuk dilihat', // lowercase
+                                    'postingan Anda berhasil', // lowercase
+                                    'post telah dibagikan', // lowercase
+                                    'Your post is being processed', // English
+                                    'We will notify you', // English
+                                    'post ready to view', // English
+                                    'Your post was successful', // English
+                                    'Post has been shared', // English
+                                    // ADDITIONAL SUCCESS INDICATORS FOR IMAGE POSTS
+                                    'Gambar Anda sedang diproses',
+                                    'gambar Anda sedang diproses',
+                                    'Gambar diproses',
+                                    'gambar diproses',
+                                    'Sedang memproses gambar',
+                                    'sedang memproses gambar',
+                                    'Gambar berhasil diupload',
+                                    'gambar berhasil diupload',
+                                    'Upload gambar berhasil',
+                                    'upload gambar berhasil',
+                                    'Postingan gambar berhasil',
+                                    'postingan gambar berhasil',
+                                    'Gambar telah dibagikan',
+                                    'gambar telah dibagikan',
+                                    'Your image is being processed',
+                                    'your image is being processed',
+                                    'Image processing',
+                                    'image processing',
+                                    'Image uploaded successfully',
+                                    'image uploaded successfully',
+                                    'Image shared',
+                                    'image shared',
+                                    // NOTIFICATION-RELATED SUCCESS INDICATORS
+                                    'Notifikasi Baru',
+                                    'notifikasi baru',
+                                    'New Notification',
+                                    'new notification',
+                                    'Notifikasi',
+                                    'notifikasi',
+                                    'Notification',
+                                    'notification'
+                                ];
+
+                                // CHECK FOR SUCCESS MESSAGES IN PAGE TEXT
+                                for (const text of successTexts) {
+                                    if (allText.includes(text)) {
+                                        console.log(`✅ Found success text: "${text}"`);
+                                        return { found: true, message: text, type: 'success_text', source: 'page_text' };
+                                    }
+                                }
+
+                                // CHECK FOR SUCCESS MESSAGES IN NOTIFICATIONS/TOASTS
+                                const notificationElements = document.querySelectorAll('[role="alert"], [data-testid*="toast"], [data-testid*="notification"], .notification, .toast, .snackbar');
+                                for (const element of notificationElements) {
+                                    const elementText = element.textContent || '';
+                                    for (const text of successTexts) {
+                                        if (elementText.includes(text)) {
+                                            console.log(`✅ Found success text in notification: "${text}"`);
+                                            return { found: true, message: text, type: 'success_notification', source: 'notification' };
+                                        }
+                                    }
+                                }
+
+                                // CHECK FOR SUCCESS MESSAGES IN DIALOGS/MODALS
+                                const dialogElements = document.querySelectorAll('[role="dialog"], [role="modal"], .modal, .dialog, .popup');
+                                for (const element of dialogElements) {
+                                    const elementText = element.textContent || '';
+                                    for (const text of successTexts) {
+                                        if (elementText.includes(text)) {
+                                            console.log(`✅ Found success text in dialog: "${text}"`);
+                                            return { found: true, message: text, type: 'success_dialog', source: 'dialog' };
+                                        }
+                                    }
+                                }
+
+                                // CHECK FOR URL CHANGES THAT INDICATE SUCCESS
+                                const currentUrl = window.location.href;
+                                if (currentUrl.includes('/posts/') && currentUrl.includes('pfbid')) {
+                                    console.log('✅ Success detected via URL change (post ID found)');
+                                    return { found: true, message: 'Post URL detected', type: 'url_success', source: 'url' };
+                                }
+
+                                return { found: false };
+                            });
+
+                            if (!successMessage.found) {
+                                await new Promise(resolve => setTimeout(resolve, 2000));
+                                attempts++;
+                            } else {
+                                console.log(`🎉 SUCCESS NOTIFICATION DETECTED! Type: ${successMessage.type}, Message: "${successMessage.message}", Source: ${successMessage.source}`);
+
+                                // Take screenshot when success message is detected
+                                const screenshotName = `debug-success-detected-${successMessage.type}.png`;
+                                await page.screenshot({ path: screenshotName, width: 1024, height: 768 });
+                                console.log(`📸 Screenshot: ${screenshotName}`);
+
+                                // Add visual indicator for success detection
+                                await page.evaluate((message) => {
+                                    const successIndicator = document.createElement('div');
+                                    successIndicator.id = 'upload-success-indicator';
+                                    successIndicator.style.position = 'fixed';
+                                    successIndicator.style.left = '50%';
+                                    successIndicator.style.top = '50%';
+                                    successIndicator.style.transform = 'translate(-50%, -50%)';
+                                    successIndicator.style.width = '300px';
+                                    successIndicator.style.height = '150px';
+                                    successIndicator.style.border = '8px solid #00FF00'; // Green border
+                                    successIndicator.style.borderRadius = '20px';
+                                    successIndicator.style.backgroundColor = 'rgba(0, 255, 0, 0.95)'; // Green background
+                                    successIndicator.style.zIndex = '1000000';
+                                    successIndicator.style.pointerEvents = 'none';
+                                    successIndicator.style.boxShadow = '0 0 100px rgba(0, 255, 0, 1), 0 0 200px rgba(0, 255, 0, 0.8)';
+                                    successIndicator.textContent = `UPLOAD SUCCESS!\n${message}`;
+                                    successIndicator.style.color = 'white';
+                                    successIndicator.style.fontSize = '18px';
+                                    successIndicator.style.display = 'flex';
+                                    successIndicator.style.alignItems = 'center';
+                                    successIndicator.style.justifyContent = 'center';
+                                    successIndicator.style.fontWeight = 'bold';
+                                    successIndicator.style.textShadow = '2px 2px 4px black';
+                                    successIndicator.style.textAlign = 'center';
+                                    successIndicator.style.lineHeight = '1.4';
+                                    successIndicator.style.whiteSpace = 'pre-line';
+                                    document.body.appendChild(successIndicator);
+                                    console.log('✅ UPLOAD SUCCESS INDICATOR added to DOM');
+
+                                    // Flash animation and remove after 5 seconds
+                                    let opacity = 1;
+                                    const flash = setInterval(() => {
+                                        opacity = opacity === 1 ? 0.3 : 1;
+                                        successIndicator.style.opacity = opacity;
+                                    }, 300);
+
+                                    setTimeout(() => {
+                                        clearInterval(flash);
+                                        if (successIndicator.parentNode) {
+                                            successIndicator.parentNode.removeChild(successIndicator);
+                                        }
+                                    }, 5000);
+                                }, successMessage.message);
+
+                                break;
+                            }
+                        }
+
+                        if (successMessage.found) {
+                            console.log('🎉 IMAGE POST SUCCESS MESSAGE FOUND!');
+                            console.log(`📝 Message: "${successMessage.message}"`);
+
+                            const uploadUrl = page ? page.url() : 'unknown';
+
+                            // CLEANUP BROWSER AS SOON AS SUCCESS IS DETECTED
+                            console.log('🧹 Cleaning up browser (success detected)...');
+                            await this.cleanup(page);
+
+                            return {
+                                success: true,
+                                url: uploadUrl
+                            };
+                        } else {
+                            console.log('⚠️ Success message not found within timeout, checking fallback conditions...');
+
+                            // FALLBACK SUCCESS DETECTION - Check for other success indicators
+                            const fallbackSuccess = await page.evaluate(() => {
+                                const currentUrl = window.location.href;
+                                const allText = document.body.textContent || '';
+
+                                // Check 1: URL contains post ID (strong indicator of success)
+                                const hasPostId = currentUrl.includes('/posts/') && currentUrl.includes('pfbid');
+                                if (hasPostId) {
+                                    console.log('✅ Fallback: Post URL with ID detected');
+                                    return { success: true, reason: 'post_url_with_id', url: currentUrl };
+                                }
+
+                                // Check 2: URL changed from composer/create page (indicates modal closed)
+                                const urlChangedFromComposer = !currentUrl.includes('/composer/') &&
+                                                              !currentUrl.includes('/reel/create') &&
+                                                              !currentUrl.includes('/create/');
+                                if (urlChangedFromComposer) {
+                                    console.log('✅ Fallback: URL changed from composer page');
+                                    return { success: true, reason: 'url_changed_from_composer', url: currentUrl };
+                                }
+
+                                // Check 3: No more composer modal visible
+                                const composerElements = document.querySelectorAll('[role="dialog"], .modal, .popup, .overlay');
+                                const hasComposerModal = Array.from(composerElements).some(el => {
+                                    const text = el.textContent?.toLowerCase() || '';
+                                    return text.includes('buat') || text.includes('create') ||
+                                           text.includes('posting') || text.includes('post') ||
+                                           text.includes('upload') || text.includes('unggah');
+                                });
+
+                                if (!hasComposerModal) {
+                                    console.log('✅ Fallback: No composer modal visible');
+                                    return { success: true, reason: 'no_composer_modal', url: currentUrl };
+                                }
+
+                                // Check 4: Check for notification elements that might indicate success
+                                const notificationElements = document.querySelectorAll('[role="alert"], [data-testid*="notification"], .notification, .toast');
+                                for (const element of notificationElements) {
+                                    const elementText = (element.textContent || '').toLowerCase();
+                                    if (elementText.includes('berhasil') || elementText.includes('success') ||
+                                        elementText.includes('selesai') || elementText.includes('complete') ||
+                                        elementText.includes('dibagikan') || elementText.includes('shared')) {
+                                        console.log('✅ Fallback: Success notification element found');
+                                        return { success: true, reason: 'success_notification_element', url: currentUrl };
+                                    }
+                                }
+
+                                return { success: false, reason: 'no_fallback_conditions_met' };
+                            });
+
+                            if (fallbackSuccess.success) {
+                                console.log(`🎉 FALLBACK SUCCESS DETECTED! Reason: ${fallbackSuccess.reason}`);
+
+                                // Take screenshot for successful fallback detection
+                                const fallbackScreenshotName = `debug-fallback-success-${fallbackSuccess.reason}.png`;
+                                await page.screenshot({ path: fallbackScreenshotName, width: 1024, height: 768 });
+                                console.log(`📸 Screenshot: ${fallbackScreenshotName}`);
+
+                                // Add visual indicator for fallback success
+                                await page.evaluate((reason) => {
+                                    const successIndicator = document.createElement('div');
+                                    successIndicator.id = 'fallback-upload-success-indicator';
+                                    successIndicator.style.position = 'fixed';
+                                    successIndicator.style.left = '50%';
+                                    successIndicator.style.top = '50%';
+                                    successIndicator.style.transform = 'translate(-50%, -50%)';
+                                    successIndicator.style.width = '350px';
+                                    successIndicator.style.height = '180px';
+                                    successIndicator.style.border = '10px solid #FFA500'; // Orange border for fallback
+                                    successIndicator.style.borderRadius = '25px';
+                                    successIndicator.style.backgroundColor = 'rgba(255, 165, 0, 0.95)'; // Orange background
+                                    successIndicator.style.zIndex = '1000000';
+                                    successIndicator.style.pointerEvents = 'none';
+                                    successIndicator.style.boxShadow = '0 0 100px rgba(255, 165, 0, 1), 0 0 200px rgba(255, 165, 0, 0.8)';
+                                    successIndicator.textContent = `FALLBACK SUCCESS!\nReason: ${reason}\nUpload appears successful`;
+                                    successIndicator.style.color = 'white';
+                                    successIndicator.style.fontSize = '16px';
+                                    successIndicator.style.display = 'flex';
+                                    successIndicator.style.alignItems = 'center';
+                                    successIndicator.style.justifyContent = 'center';
+                                    successIndicator.style.fontWeight = 'bold';
+                                    successIndicator.style.textShadow = '2px 2px 4px black';
+                                    successIndicator.style.textAlign = 'center';
+                                    successIndicator.style.lineHeight = '1.4';
+                                    successIndicator.style.whiteSpace = 'pre-line';
+                                    document.body.appendChild(successIndicator);
+                                    console.log('✅ FALLBACK UPLOAD SUCCESS INDICATOR added to DOM');
+
+                                    // Flash animation and remove after 6 seconds
+                                    let opacity = 1;
+                                    const flash = setInterval(() => {
+                                        opacity = opacity === 1 ? 0.3 : 1;
+                                        successIndicator.style.opacity = opacity;
+                                    }, 300);
+
+                                    setTimeout(() => {
+                                        clearInterval(flash);
+                                        if (successIndicator.parentNode) {
+                                            successIndicator.parentNode.removeChild(successIndicator);
+                                        }
+                                    }, 6000);
+                                }, fallbackSuccess.reason);
+
+                                const uploadUrl = page ? page.url() : 'unknown';
+
+                                // CLEANUP BROWSER FOR FALLBACK SUCCESS
+                                console.log('🧹 Cleaning up browser (fallback success detected)...');
+                                await this.cleanup(page);
+
+                                return {
+                                    success: true,
+                                    url: uploadUrl,
+                                    message: `Fallback success: ${fallbackSuccess.reason}`
+                                };
+                            } else {
+                                console.log('❌ No fallback success conditions met either');
+                                // Take screenshot when success message is not found
+                                await page.screenshot({ path: 'debug-error-success-message-not-found.png', width: 1024, height: 768 });
+                                console.log('📸 Screenshot: debug-error-success-message-not-found.png');
+
+                                const uploadUrl = page ? page.url() : 'unknown';
+
+                                // CLEANUP BROWSER ON FAILURE TOO
+                                console.log('🧹 Cleaning up browser (failure detected)...');
+                                await this.cleanup(page);
+
+                                return {
+                                    success: false,
+                                    error: 'Success message not found'
+                                };
+                            }
+                        }
+
+                    } else {
+                        console.log('❌ FAILED: Could not click "Kirim" button');
+                        throw new Error('Could not click the "Kirim" button');
+                    }
+
+                } else {
+                    console.log('❌ Failed to find "Kirim" button');
+                    throw new Error('Could not find the "Kirim" button');
+                }
+
+            } catch (error) {
+                console.log('❌ Error during "Kirim" click:', error.message);
+                throw error;
+            }
+
+        } catch (error) {
+            console.error('Error uploading image as post:', error);
+            const uploadUrl = page ? page.url() : 'unknown';
+            await this.cleanup(page);
+            return {
+                success: false,
+                error: `Image post upload failed: ${error.message}`
+            };
+        }
+    }
+
+    /**
      * Cleanup browser dan pages
      */
     async cleanup(page) {
@@ -2988,8 +4384,6 @@ if (switchSuccess) {
             console.error('Error during cleanup:', error);
         }
     }
-
-    // ... (methods lainnya tetap sama)
 
     /**
      * Set Facebook language to Indonesian
