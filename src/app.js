@@ -293,7 +293,14 @@ function initializeElements() {
     userConfirmPassword: document.getElementById('user-confirm-password'),
     userRole: document.getElementById('user-role'),
     cancelUserBtn: document.getElementById('cancel-user-btn'),
-    saveUserBtn: document.getElementById('save-user-btn')
+    saveUserBtn: document.getElementById('save-user-btn'),
+
+    // File Manager Elements
+    refreshFilesBtn: document.getElementById('refresh-files-btn'),
+    deleteSelectedFilesBtn: document.getElementById('delete-selected-files-btn'),
+    fileList: document.getElementById('file-list'),
+    totalFiles: document.getElementById('total-files'),
+    totalSize: document.getElementById('total-size')
     };
 }
 
@@ -431,6 +438,14 @@ function setupEventListeners() {
     if (elements.refreshAdminDataBtn) {
         elements.refreshAdminDataBtn.addEventListener('click', refreshAdminData);
     }
+
+    // File Manager Elements Event Listeners
+    if (elements.refreshFilesBtn) {
+        elements.refreshFilesBtn.addEventListener('click', refreshFiles);
+    }
+    if (elements.deleteSelectedFilesBtn) {
+        elements.deleteSelectedFilesBtn.addEventListener('click', deleteSelectedFiles);
+    }
 }
 
 // Setup navigation
@@ -551,6 +566,7 @@ function updateTabContent(tabName) {
             break;
         case 'admin':
             loadAdminData();
+            refreshFiles(); // Load files for file manager
             break;
         case 'logs':
             updateLogsDisplay();
@@ -4892,5 +4908,230 @@ loadAdminData = async function() {
         // Update with empty data on error
         elements.totalAccounts.textContent = '0';
         updateAdminAccountsDisplay([]);
+    }
+};
+
+// File Manager Functions
+async function refreshFiles() {
+    try {
+        elements.refreshFilesBtn.disabled = true;
+        elements.refreshFilesBtn.innerHTML = '<div class="loading"></div> Loading...';
+
+        const result = await fetch(`${API_BASE}/api/admin/files`);
+        const response = await result.json();
+
+        if (response.success) {
+            updateFilesDisplay(response.files || []);
+            showToast('File berhasil diperbaharui', 'success');
+        } else {
+            updateFilesDisplay([]);
+            showToast(`Gagal memperbaharui file: ${response.error}`, 'error');
+        }
+    } catch (error) {
+        updateFilesDisplay([]);
+        showToast(`Error memperbaharui file: ${error.message}`, 'error');
+    } finally {
+        elements.refreshFilesBtn.disabled = false;
+        elements.refreshFilesBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh Files';
+    }
+}
+
+function updateFilesDisplay(files) {
+    if (!elements.fileList) return;
+
+    if (!files || files.length === 0) {
+        elements.fileList.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-folder-open"></i>
+                <h3>Folder kosong</h3>
+                <p>Tidak ada file di folder uploads.</p>
+            </div>
+        `;
+        elements.totalFiles.textContent = '0';
+        elements.totalSize.textContent = '0 MB';
+        updateDeleteSelectedButton();
+        return;
+    }
+
+    // Calculate total size
+    const totalSize = files.reduce((sum, file) => sum + (file.size || 0), 0);
+    const totalSizeMB = (totalSize / (1024 * 1024)).toFixed(2);
+
+    elements.totalFiles.textContent = files.length;
+    elements.totalSize.textContent = `${totalSizeMB} MB`;
+
+    elements.fileList.innerHTML = files.map(file => {
+        const fileSizeMB = file.size ? (file.size / (1024 * 1024)).toFixed(2) : '0.00';
+        const modifiedDate = file.modified ? new Date(file.modified).toLocaleString('id-ID') : 'Unknown';
+
+        return `
+            <div class="file-item">
+                <div class="file-checkbox">
+                    <label class="checkbox-label">
+                        <input type="checkbox" class="file-checkbox-input" value="${file.name}" onchange="updateDeleteSelectedButton()">
+                        <span class="checkbox-custom"></span>
+                    </label>
+                </div>
+                <div class="file-info">
+                    <div class="file-icon">
+                        <i class="fas fa-file-video"></i>
+                    </div>
+                    <div class="file-details">
+                        <div class="file-name">${file.name}</div>
+                        <div class="file-meta">
+                            <span class="file-size">${fileSizeMB} MB</span>
+                            <span class="file-date">${modifiedDate}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="file-actions">
+                    <button class="btn-danger btn-small" onclick="deleteFile('${file.name}')">
+                        <i class="fas fa-trash"></i> Hapus
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    // Add event listener for select all checkbox
+    const selectAllCheckbox = document.getElementById('select-all-files');
+    if (selectAllCheckbox) {
+        selectAllCheckbox.addEventListener('change', toggleSelectAllFiles);
+    }
+
+    updateDeleteSelectedButton();
+}
+
+// File Manager Bulk Operations Functions
+function toggleSelectAllFiles() {
+    const selectAllCheckbox = document.getElementById('select-all-files');
+    const fileCheckboxes = document.querySelectorAll('.file-checkbox-input');
+
+    const isChecked = selectAllCheckbox.checked;
+
+    fileCheckboxes.forEach(checkbox => {
+        checkbox.checked = isChecked;
+    });
+
+    updateDeleteSelectedButton();
+}
+
+function updateDeleteSelectedButton() {
+    const selectedCheckboxes = document.querySelectorAll('.file-checkbox-input:checked');
+    const deleteSelectedBtn = elements.deleteSelectedFilesBtn;
+
+    if (deleteSelectedBtn) {
+        const hasSelection = selectedCheckboxes.length > 0;
+        deleteSelectedBtn.disabled = !hasSelection;
+
+        // Update button text to show count
+        const buttonText = deleteSelectedBtn.querySelector('.btn-text') || deleteSelectedBtn;
+        if (hasSelection) {
+            buttonText.textContent = `Hapus ${selectedCheckboxes.length} File Terpilih`;
+        } else {
+            buttonText.textContent = 'Hapus File Terpilih';
+        }
+    }
+
+    // Update select all checkbox state
+    const selectAllCheckbox = document.getElementById('select-all-files');
+    const totalCheckboxes = document.querySelectorAll('.file-checkbox-input').length;
+
+    if (selectAllCheckbox) {
+        if (selectedCheckboxes.length === 0) {
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = false;
+        } else if (selectedCheckboxes.length === totalCheckboxes) {
+            selectAllCheckbox.checked = true;
+            selectAllCheckbox.indeterminate = false;
+        } else {
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = true;
+        }
+    }
+}
+
+async function deleteSelectedFiles() {
+    const selectedCheckboxes = document.querySelectorAll('.file-checkbox-input:checked');
+
+    if (selectedCheckboxes.length === 0) {
+        showToast('Tidak ada file yang dipilih', 'warning');
+        return;
+    }
+
+    const selectedFiles = Array.from(selectedCheckboxes).map(checkbox => checkbox.value);
+    const confirmMessage = `Apakah Anda yakin ingin menghapus ${selectedFiles.length} file yang dipilih?\n\nFile yang akan dihapus:\n${selectedFiles.map(name => `• ${name}`).join('\n')}\n\nTindakan ini tidak dapat dibatalkan!`;
+
+    if (!confirm(confirmMessage)) {
+        return;
+    }
+
+    const deleteSelectedBtn = elements.deleteSelectedFilesBtn;
+    if (deleteSelectedBtn) {
+        deleteSelectedBtn.disabled = true;
+        deleteSelectedBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Menghapus...';
+    }
+
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (const fileName of selectedFiles) {
+        try {
+            const response = await fetch(`${API_BASE}/api/admin/files/${encodeURIComponent(fileName)}`, {
+                method: 'DELETE'
+            });
+
+            const result = await response.json();
+
+            if (result.success) {
+                successCount++;
+            } else {
+                errorCount++;
+                console.error(`Failed to delete file ${fileName}:`, result.error);
+            }
+        } catch (error) {
+            errorCount++;
+            console.error(`Error deleting file ${fileName}:`, error);
+        }
+    }
+
+    if (deleteSelectedBtn) {
+        deleteSelectedBtn.disabled = false;
+        deleteSelectedBtn.innerHTML = '<i class="fas fa-trash"></i> Hapus File Terpilih';
+    }
+
+    // Refresh the file list
+    await refreshFiles();
+
+    if (successCount > 0) {
+        showToast(`${successCount} file berhasil dihapus`, 'success');
+    }
+    if (errorCount > 0) {
+        showToast(`${errorCount} file gagal dihapus`, 'warning');
+    }
+}
+
+// Make file functions globally available
+window.deleteFile = async function(fileName) {
+    if (!confirm(`Apakah Anda yakin ingin menghapus file "${fileName}"?\n\nTindakan ini tidak dapat dibatalkan!`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/files/${encodeURIComponent(fileName)}`, {
+            method: 'DELETE'
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            await refreshFiles(); // Refresh the file list
+            showToast(`File "${fileName}" berhasil dihapus`, 'success');
+        } else {
+            showToast(`Gagal menghapus file: ${result.error}`, 'error');
+        }
+    } catch (error) {
+        console.error('Delete file error:', error);
+        showToast(`Error menghapus file: ${error.message}`, 'error');
     }
 };

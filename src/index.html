@@ -546,6 +546,59 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- File Management Section -->
+                    <div class="admin-section">
+                        <div class="admin-section-header">
+                            <h3><i class="fas fa-folder-open"></i> File Manager - Uploads Directory</h3>
+                            <div class="section-actions">
+                                <button class="btn-danger btn-sm" id="delete-selected-files-btn" disabled>
+                                    <i class="fas fa-trash"></i> Delete Selected
+                                </button>
+                                <button class="btn-secondary btn-sm" id="refresh-files-btn">
+                                    <i class="fas fa-sync-alt"></i> Refresh Files
+                                </button>
+                            </div>
+                        </div>
+                        <div class="admin-section-content">
+                            <!-- File Stats -->
+                            <div class="file-stats">
+                                <div class="stat-card">
+                                    <span class="stat-number" id="total-files">0</span>
+                                    <span class="stat-label">Total Files</span>
+                                </div>
+                                <div class="stat-card">
+                                    <span class="stat-number" id="total-size">0 MB</span>
+                                    <span class="stat-label">Total Size</span>
+                                </div>
+                            </div>
+
+                            <!-- File List -->
+                            <div class="file-manager">
+                                <div class="file-list-header">
+                                    <div class="file-col-checkbox">
+                                        <label class="checkbox-label">
+                                            <input type="checkbox" id="select-all-files">
+                                            <span class="checkbox-custom"></span>
+                                            <span class="checkbox-text">Select All</span>
+                                        </label>
+                                    </div>
+                                    <div class="file-col-name">File Name</div>
+                                    <div class="file-col-size">Size</div>
+                                    <div class="file-col-modified">Modified</div>
+                                    <div class="file-col-type">Type</div>
+                                    <div class="file-col-actions">Actions</div>
+                                </div>
+                                <div class="file-list" id="file-list">
+                                    <div class="empty-state">
+                                        <i class="fas fa-folder-open"></i>
+                                        <h3>Loading files...</h3>
+                                        <p>Please wait while we load the file data.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Settings Tab -->

@@ -2097,6 +2097,136 @@ app.put('/api/admin/settings', requireAdmin, (req, res) => {
     }
 });
 
+// Admin File Management Routes
+app.get('/api/admin/files', requireAdmin, (req, res) => {
+    try {
+        const uploadsDir = path.join(__dirname, 'uploads');
+
+        // Ensure uploads directory exists
+        if (!fs.existsSync(uploadsDir)) {
+            fs.mkdirSync(uploadsDir, { recursive: true });
+        }
+
+        // Get all files in uploads directory
+        const files = fs.readdirSync(uploadsDir)
+            .filter(file => {
+                // Skip directories and hidden files
+                const filePath = path.join(uploadsDir, file);
+                return fs.statSync(filePath).isFile() && !file.startsWith('.');
+            })
+            .map(file => {
+                const filePath = path.join(uploadsDir, file);
+                const stats = fs.statSync(filePath);
+
+                return {
+                    name: file,
+                    path: filePath,
+                    size: stats.size,
+                    sizeFormatted: formatFileSize(stats.size),
+                    modified: stats.mtime.toISOString(),
+                    created: stats.birthtime.toISOString(),
+                    extension: path.extname(file).toLowerCase(),
+                    type: getFileType(file)
+                };
+            })
+            .sort((a, b) => new Date(b.modified) - new Date(a.modified)); // Sort by modified date, newest first
+
+        // Get directory stats
+        const totalFiles = files.length;
+        const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+
+        res.json({
+            success: true,
+            files: files,
+            stats: {
+                totalFiles: totalFiles,
+                totalSize: totalSize,
+                totalSizeFormatted: formatFileSize(totalSize)
+            }
+        });
+    } catch (error) {
+        console.error('Error listing files:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+app.delete('/api/admin/files/:filename', requireAdmin, (req, res) => {
+    try {
+        const { filename } = req.params;
+        const uploadsDir = path.join(__dirname, 'uploads');
+        const filePath = path.join(uploadsDir, filename);
+
+        // Security check: ensure file is within uploads directory
+        const resolvedPath = path.resolve(filePath);
+        const resolvedUploadsDir = path.resolve(uploadsDir);
+
+        if (!resolvedPath.startsWith(resolvedUploadsDir)) {
+            return res.status(403).json({
+                success: false,
+                error: 'Access denied: Invalid file path'
+            });
+        }
+
+        // Check if file exists
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({
+                success: false,
+                error: 'File not found'
+            });
+        }
+
+        // Check if it's actually a file (not a directory)
+        const stats = fs.statSync(filePath);
+        if (!stats.isFile()) {
+            return res.status(400).json({
+                success: false,
+                error: 'Path is not a file'
+            });
+        }
+
+        // Delete the file
+        fs.unlinkSync(filePath);
+
+        console.log(`🗑️ Admin deleted file: ${filename}`);
+
+        res.json({
+            success: true,
+            message: `File "${filename}" deleted successfully`
+        });
+    } catch (error) {
+        console.error('Error deleting file:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// Helper functions for file management
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 Bytes';
+
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function getFileType(filename) {
+    const ext = path.extname(filename).toLowerCase();
+
+    const videoTypes = ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm', '.mkv', '.3gp'];
+    const imageTypes = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg'];
+
+    if (videoTypes.includes(ext)) return 'video';
+    if (imageTypes.includes(ext)) return 'image';
+    return 'other';
+}
+
 // Debug Routes (Admin-only)
 app.get('/api/debug/screenshots', requireAdmin, (req, res) => {
     try {
