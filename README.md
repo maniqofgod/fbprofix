@@ -86,6 +86,87 @@ npm test
 npm run build
 ```
 
+## 🌐 Server Configuration (Nginx)
+
+### Nginx Configuration for Production Deployment
+
+```nginx
+server {
+    server_name fbpro.1337.edu.pl;
+    client_max_body_size 500m;
+
+    # Main application
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    # API routes
+    location /api/ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+
+    # Static assets
+    location /assets/ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    listen 443 ssl; # managed by Certbot
+    ssl_certificate /etc/letsencrypt/live/fbpro.1337.edu.pl/fullchain.pem; # managed by Certbot
+    ssl_certificate_key /etc/letsencrypt/live/fbpro.1337.edu.pl/privkey.pem; # managed by Certbot
+    include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem; # managed by Certbot
+
+}
+server {
+    if ($host = fbpro.1337.edu.pl) {
+        return 301 https://$host$request_uri;
+    } # managed by Certbot
+
+
+    server_name fbpro.1337.edu.pl;
+
+    listen 80;
+    return 404; # managed by Certbot
+
+
+}
+```
+
+### Nginx Configuration Features:
+- **SSL/TLS**: HTTPS dengan Let's Encrypt certificates
+- **Large File Uploads**: `client_max_body_size 500m` untuk video uploads
+- **Proxy Settings**: Proper header forwarding untuk aplikasi Node.js
+- **Caching**: Static assets caching untuk performance
+- **Security**: HTTPS redirect dan secure headers
+
+### Deployment Steps:
+1. **Install Nginx**: `sudo apt install nginx`
+2. **Configure SSL**: Gunakan Certbot untuk Let's Encrypt
+3. **Copy config**: Salin konfigurasi di atas ke `/etc/nginx/sites-available/fbpro.1337.edu.pl.conf`
+4. **Enable site**: `sudo ln -s /etc/nginx/sites-available/fbpro.1337.edu.pl.conf /etc/nginx/sites-enabled/`
+5. **Test config**: `sudo nginx -t`
+6. **Restart Nginx**: `sudo systemctl restart nginx`
+
 ## 📖 Cara Penggunaan
 
 ### 1. Setup Akun Facebook
