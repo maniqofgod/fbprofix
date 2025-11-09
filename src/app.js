@@ -994,7 +994,255 @@ function toggleUploadMode() {
     updateSendButtonState();
 }
 
-// Bulk file selection
+// Bulk upload progress modal state
+let bulkUploadState = {
+    isUploading: false,
+    totalFiles: 0,
+    completedFiles: 0,
+    failedFiles: 0,
+    currentFile: null,
+    startTime: null,
+    uploadedFiles: [],
+    failedFiles: [],
+    timeElapsedInterval: null
+};
+
+// Create bulk upload progress modal
+function createBulkUploadModal() {
+    const modal = document.createElement('div');
+    modal.id = 'bulk-upload-modal';
+    modal.className = 'modal bulk-upload-modal';
+    modal.innerHTML = `
+        <div class="modal-content bulk-upload-modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-upload"></i> Upload Bulk Video</h3>
+                <button class="modal-close" id="bulk-upload-modal-close">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="bulk-upload-progress">
+                <div class="bulk-upload-stats">
+                    <div class="stat-item">
+                        <span class="stat-label">Total Files:</span>
+                        <span class="stat-value" id="bulk-total-files">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Completed:</span>
+                        <span class="stat-value" id="bulk-completed-files">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Failed:</span>
+                        <span class="stat-value" id="bulk-failed-files">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Time Elapsed:</span>
+                        <span class="stat-value" id="bulk-time-elapsed">00:00</span>
+                    </div>
+                </div>
+                <div class="bulk-upload-progress-bar">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="bulk-progress-fill" style="width: 0%"></div>
+                    </div>
+                    <div class="progress-text">
+                        <span id="bulk-progress-text">0%</span>
+                    </div>
+                </div>
+                <div class="bulk-upload-current">
+                    <div class="current-file-info">
+                        <i class="fas fa-file-video"></i>
+                        <span id="bulk-current-file">Preparing upload...</span>
+                    </div>
+                    <div class="current-file-status" id="bulk-current-status">
+                        <div class="loading-spinner"></div>
+                        <span>Initializing...</span>
+                    </div>
+                </div>
+                <div class="bulk-upload-files-list" id="bulk-upload-files-list">
+                    <!-- Individual file status will be populated here -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" id="bulk-upload-cancel-btn" disabled>
+                    <i class="fas fa-times"></i> Cancel Upload
+                </button>
+                <button class="btn-primary" id="bulk-upload-close-btn" style="display: none;">
+                    <i class="fas fa-check"></i> Close
+                </button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+
+    // Add event listeners
+    document.getElementById('bulk-upload-modal-close').addEventListener('click', hideBulkUploadModal);
+    document.getElementById('bulk-upload-cancel-btn').addEventListener('click', cancelBulkUpload);
+    document.getElementById('bulk-upload-close-btn').addEventListener('click', hideBulkUploadModal);
+
+    return modal;
+}
+
+// Show bulk upload modal
+function showBulkUploadModal() {
+    let modal = document.getElementById('bulk-upload-modal');
+    if (!modal) {
+        modal = createBulkUploadModal();
+    }
+    modal.classList.add('show');
+}
+
+// Hide bulk upload modal
+function hideBulkUploadModal() {
+    const modal = document.getElementById('bulk-upload-modal');
+    if (modal) {
+        modal.classList.remove('show');
+        // Reset state
+        resetBulkUploadState();
+    }
+}
+
+// Reset bulk upload state
+function resetBulkUploadState() {
+    bulkUploadState = {
+        isUploading: false,
+        totalFiles: 0,
+        completedFiles: 0,
+        failedFiles: 0,
+        currentFile: null,
+        startTime: null,
+        uploadedFiles: [],
+        failedFiles: []
+    };
+}
+
+// Update bulk upload progress
+function updateBulkUploadProgress(fileName, status, error = null) {
+    const currentFileEl = document.getElementById('bulk-current-file');
+    const currentStatusEl = document.getElementById('bulk-current-status');
+    const progressFillEl = document.getElementById('bulk-progress-fill');
+    const progressTextEl = document.getElementById('bulk-progress-text');
+    const completedEl = document.getElementById('bulk-completed-files');
+    const failedEl = document.getElementById('bulk-failed-files');
+    const timeElapsedEl = document.getElementById('bulk-time-elapsed');
+
+    if (currentFileEl && fileName) {
+        currentFileEl.textContent = fileName;
+    }
+
+    if (currentStatusEl) {
+        let statusHtml = '';
+        switch (status) {
+            case 'uploading':
+                statusHtml = '<div class="loading-spinner"></div><span>Uploading...</span>';
+                break;
+            case 'success':
+                statusHtml = '<i class="fas fa-check-circle text-success"></i><span>Upload successful</span>';
+                break;
+            case 'error':
+                statusHtml = `<i class="fas fa-exclamation-triangle text-error"></i><span>Upload failed${error ? ': ' + error : ''}</span>`;
+                break;
+            case 'completed':
+                statusHtml = '<i class="fas fa-check-circle text-success"></i><span>All uploads completed</span>';
+                break;
+            default:
+                statusHtml = '<div class="loading-spinner"></div><span>Processing...</span>';
+        }
+        currentStatusEl.innerHTML = statusHtml;
+    }
+
+    // Update progress bar
+    const progress = bulkUploadState.totalFiles > 0 ?
+        ((bulkUploadState.completedFiles + bulkUploadState.failedFiles) / bulkUploadState.totalFiles) * 100 : 0;
+
+    if (progressFillEl) {
+        progressFillEl.style.width = `${progress}%`;
+    }
+
+    if (progressTextEl) {
+        progressTextEl.textContent = `${Math.round(progress)}%`;
+    }
+
+    // Update counters
+    if (completedEl) {
+        completedEl.textContent = bulkUploadState.completedFiles;
+    }
+
+    if (failedEl) {
+        failedEl.textContent = bulkUploadState.failedFiles;
+    }
+
+    // Update time elapsed
+    if (timeElapsedEl && bulkUploadState.startTime) {
+        const elapsed = Math.floor((Date.now() - bulkUploadState.startTime) / 1000);
+        const minutes = Math.floor(elapsed / 60);
+        const seconds = elapsed % 60;
+        timeElapsedEl.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    }
+
+    // Update file list
+    updateBulkUploadFileList();
+}
+
+// Update individual file status in the list
+function updateBulkUploadFileList() {
+    const fileListEl = document.getElementById('bulk-upload-files-list');
+    if (!fileListEl) return;
+
+    const allFiles = [...bulkUploadState.uploadedFiles, ...bulkUploadState.failedFiles];
+    if (allFiles.length === 0) return;
+
+    fileListEl.innerHTML = allFiles.map((fileData, index) => {
+        let statusClass = 'pending';
+        let statusIcon = 'fas fa-clock';
+        let statusText = 'Pending';
+
+        if (fileData.status === 'success') {
+            statusClass = 'success';
+            statusIcon = 'fas fa-check-circle';
+            statusText = 'Success';
+        } else if (fileData.status === 'error') {
+            statusClass = 'error';
+            statusIcon = 'fas fa-exclamation-triangle';
+            statusText = fileData.error || 'Failed';
+        }
+
+        return `
+            <div class="bulk-upload-file-item ${statusClass}">
+                <div class="file-info">
+                    <i class="fas fa-file-video"></i>
+                    <span class="file-name">${fileData.fileName}</span>
+                </div>
+                <div class="file-status">
+                    <i class="${statusIcon}"></i>
+                    <span>${statusText}</span>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+// Cancel bulk upload
+function cancelBulkUpload() {
+    if (bulkUploadState.isUploading) {
+        bulkUploadState.isUploading = false;
+
+        // Clear the timer
+        if (bulkUploadState.timeElapsedInterval) {
+            clearInterval(bulkUploadState.timeElapsedInterval);
+            bulkUploadState.timeElapsedInterval = null;
+        }
+
+        updateBulkUploadProgress(null, 'cancelled');
+        showToast('Bulk upload dibatalkan', 'warning');
+
+        // Update modal buttons
+        const cancelBtn = document.getElementById('bulk-upload-cancel-btn');
+        const closeBtn = document.getElementById('bulk-upload-close-btn');
+        if (cancelBtn) cancelBtn.disabled = true;
+        if (closeBtn) closeBtn.style.display = 'block';
+    }
+}
+
+// Bulk file selection with progress tracking
 async function selectBulkVideoFiles() {
     try {
         const fileInput = document.createElement('input');
@@ -1028,15 +1276,44 @@ async function selectBulkVideoFiles() {
                 return;
             }
 
-            showToast(`Mengupload ${files.length} file...`, 'info');
+            // Initialize bulk upload state
+            resetBulkUploadState();
+            bulkUploadState.totalFiles = files.length;
+            bulkUploadState.startTime = Date.now();
+            bulkUploadState.isUploading = true;
 
-            // Upload all files to server
+            // Show progress modal
+            showBulkUploadModal();
+            updateBulkUploadProgress(null, 'starting');
+
+            // Update modal counters
+            document.getElementById('bulk-total-files').textContent = files.length;
+
+            // Start real-time timer for elapsed time
+            bulkUploadState.timeElapsedInterval = setInterval(() => {
+                if (bulkUploadState.isUploading && bulkUploadState.startTime) {
+                    const timeElapsedEl = document.getElementById('bulk-time-elapsed');
+                    if (timeElapsedEl) {
+                        const elapsed = Math.floor((Date.now() - bulkUploadState.startTime) / 1000);
+                        const minutes = Math.floor(elapsed / 60);
+                        const seconds = elapsed % 60;
+                        timeElapsedEl.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                    }
+                }
+            }, 1000);
+
+            // Upload all files to server with progress tracking
             const uploadedFiles = [];
             let successCount = 0;
             let errorCount = 0;
 
-            for (const file of files) {
+            for (let i = 0; i < files.length && bulkUploadState.isUploading; i++) {
+                const file = files[i];
+                bulkUploadState.currentFile = file.name;
+
                 try {
+                    updateBulkUploadProgress(file.name, 'uploading');
+
                     const formData = new FormData();
                     formData.append('video', file);
 
@@ -1051,8 +1328,15 @@ async function selectBulkVideoFiles() {
 
                     if (uploadResponse.status === 413) {
                         // Handle 413 Request Entity Too Large
-                        console.error(`Upload failed for ${file.name}: 413 Request Entity Too Large`);
+                        const errorMsg = 'File terlalu besar (413)';
+                        console.error(`Upload failed for ${file.name}: ${errorMsg}`);
+                        bulkUploadState.failedFiles.push({
+                            fileName: file.name,
+                            status: 'error',
+                            error: errorMsg
+                        });
                         errorCount++;
+                        bulkUploadState.failedFiles++;
                         continue;
                     }
 
@@ -1065,29 +1349,71 @@ async function selectBulkVideoFiles() {
                             uploadResult = { success: true, filePath: textResponse };
                         } else {
                             console.error(`Server returned HTML error for ${file.name}:`, textResponse);
+                            const errorMsg = 'Server error';
+                            bulkUploadState.failedFiles.push({
+                                fileName: file.name,
+                                status: 'error',
+                                error: errorMsg
+                            });
                             errorCount++;
+                            bulkUploadState.failedFiles++;
                             continue;
                         }
                     }
 
                     if (uploadResult.success) {
-                        uploadedFiles.push({
+                        const fileData = {
                             file: uploadResult.filePath,
                             fileName: file.name,
-                            selectedFile: file
-                        });
+                            selectedFile: file,
+                            status: 'success'
+                        };
+                        uploadedFiles.push(fileData);
+                        bulkUploadState.uploadedFiles.push(fileData);
                         successCount++;
+                        bulkUploadState.completedFiles++;
+                        updateBulkUploadProgress(file.name, 'success');
                     } else {
-                        console.error(`Upload failed for ${file.name}:`, uploadResult.error);
+                        const errorMsg = uploadResult.error || 'Upload failed';
+                        console.error(`Upload failed for ${file.name}:`, errorMsg);
+                        bulkUploadState.failedFiles.push({
+                            fileName: file.name,
+                            status: 'error',
+                            error: errorMsg
+                        });
                         errorCount++;
+                        bulkUploadState.failedFiles++;
+                        updateBulkUploadProgress(file.name, 'error', errorMsg);
                     }
                 } catch (uploadError) {
                     console.error(`Upload error for ${file.name}:`, uploadError);
+                    let errorMsg = 'Network error';
                     if (uploadError.name === 'TypeError' && uploadError.message.includes('JSON')) {
-                        console.error(`Server returned invalid response for ${file.name}, likely file too large`);
+                        errorMsg = 'Server response error (file too large?)';
                     }
+                    bulkUploadState.failedFiles.push({
+                        fileName: file.name,
+                        status: 'error',
+                        error: errorMsg
+                    });
                     errorCount++;
+                    bulkUploadState.failedFiles++;
+                    updateBulkUploadProgress(file.name, 'error', errorMsg);
                 }
+
+                // Small delay between uploads to prevent overwhelming the server
+                if (i < files.length - 1 && bulkUploadState.isUploading) {
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                }
+            }
+
+            // Mark upload as completed
+            bulkUploadState.isUploading = false;
+
+            // Clear the timer
+            if (bulkUploadState.timeElapsedInterval) {
+                clearInterval(bulkUploadState.timeElapsedInterval);
+                bulkUploadState.timeElapsedInterval = null;
             }
 
             if (uploadedFiles.length > 0) {
@@ -1099,18 +1425,28 @@ async function selectBulkVideoFiles() {
                 elements.bulkFiles.value = `${uploadedFiles.length} file dipilih`;
                 updateBulkFilesList(uploadedFiles);
 
+                updateBulkUploadProgress(null, 'completed');
+
+                // Show final results
                 if (successCount > 0) {
                     showToast(`${successCount} file berhasil diupload`, 'success');
                 }
                 if (errorCount > 0) {
-                    showToast(`${errorCount} file gagal diupload (kemungkinan terlalu besar)`, 'warning');
+                    showToast(`${errorCount} file gagal diupload`, 'warning');
                 }
 
                 updateSendButtonState();
             } else {
+                updateBulkUploadProgress(null, 'completed');
                 showToast('Tidak ada file yang berhasil diupload. Pastikan file tidak terlalu besar.', 'error');
                 elements.bulkFiles.value = '';
             }
+
+            // Update modal buttons
+            const cancelBtn = document.getElementById('bulk-upload-cancel-btn');
+            const closeBtn = document.getElementById('bulk-upload-close-btn');
+            if (cancelBtn) cancelBtn.disabled = true;
+            if (closeBtn) closeBtn.style.display = 'block';
 
             document.body.removeChild(fileInput);
         };
@@ -1119,6 +1455,7 @@ async function selectBulkVideoFiles() {
         fileInput.click();
     } catch (error) {
         showToast(`Error memilih file: ${error.message}`, 'error');
+        hideBulkUploadModal();
     }
 }
 
@@ -1682,8 +2019,32 @@ function updateQueueDisplay() {
     elements.completedCount.textContent = stats.completed;
     elements.failedCount.textContent = stats.failed;
 
+    // Always show bulk actions, even with empty queue
+    const bulkActionsHtml = `
+        <div class="queue-bulk-actions">
+            <div class="bulk-select-all">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="select-all-queue" onchange="toggleSelectAll()" ${appState.uploadQueue.length === 0 ? 'disabled' : ''}>
+                    <span class="checkmark"></span>
+                    Pilih Semua
+                </label>
+            </div>
+            <div class="bulk-action-buttons">
+                <button class="btn-warning" id="bulk-retry-btn" onclick="bulkRetrySelected()" disabled>
+                    <i class="fas fa-redo"></i> Retry Terpilih
+                </button>
+                <button class="btn-danger" id="bulk-delete-btn" onclick="bulkDeleteSelected()" disabled>
+                    <i class="fas fa-trash"></i> Hapus Terpilih
+                </button>
+                <button class="btn-danger" id="bulk-delete-all-btn" onclick="bulkDeleteAll()" ${appState.uploadQueue.length === 0 ? 'disabled' : ''}>
+                    <i class="fas fa-trash-alt"></i> Hapus Semua
+                </button>
+            </div>
+        </div>
+    `;
+
     if (appState.uploadQueue.length === 0) {
-        elements.queueList.innerHTML = `
+        elements.queueList.innerHTML = bulkActionsHtml + `
             <div class="empty-state">
                 <i class="fas fa-list"></i>
                 <h3>Antrian kosong</h3>
@@ -1766,7 +2127,13 @@ function updateQueueDisplay() {
         }
 
         return `
-            <div class="queue-item">
+            <div class="queue-item" data-queue-id="${item.id}">
+                <div class="queue-item-checkbox">
+                    <label class="checkbox-label">
+                        <input type="checkbox" class="queue-item-checkbox-input" value="${item.id}" onchange="updateBulkActionButtons()">
+                        <span class="checkmark"></span>
+                    </label>
+                </div>
                 <div class="queue-item-info">
                     <div class="queue-item-meta">Akun: ${accountName} | Halaman: ${pageName}-${pageId} | ${item.type === 'reel' ? 'Reels' : 'Video Post'}${scheduleInfo}</div>
                     <div class="queue-item-title">${item.caption || 'Tanpa caption'}</div>
@@ -4257,6 +4624,235 @@ async function refreshAdminData() {
             elements.refreshAdminDataBtn.disabled = false;
             elements.refreshAdminDataBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh Data';
         }
+    }
+}
+
+// Bulk Queue Selection Functions
+function toggleSelectAll() {
+    const selectAllCheckbox = document.getElementById('select-all-queue');
+    const itemCheckboxes = document.querySelectorAll('.queue-item-checkbox-input');
+
+    const isChecked = selectAllCheckbox.checked;
+
+    itemCheckboxes.forEach(checkbox => {
+        checkbox.checked = isChecked;
+    });
+
+    updateBulkActionButtons();
+}
+
+function updateBulkActionButtons() {
+    const selectedCheckboxes = document.querySelectorAll('.queue-item-checkbox-input:checked');
+    const bulkRetryBtn = document.getElementById('bulk-retry-btn');
+    const bulkDeleteBtn = document.getElementById('bulk-delete-btn');
+
+    const hasSelection = selectedCheckboxes.length > 0;
+
+    if (bulkRetryBtn) {
+        bulkRetryBtn.disabled = !hasSelection;
+    }
+    if (bulkDeleteBtn) {
+        bulkDeleteBtn.disabled = !hasSelection;
+    }
+
+    // Update select all checkbox state
+    const selectAllCheckbox = document.getElementById('select-all-queue');
+    const totalCheckboxes = document.querySelectorAll('.queue-item-checkbox-input').length;
+
+    if (selectAllCheckbox) {
+        if (selectedCheckboxes.length === 0) {
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = false;
+        } else if (selectedCheckboxes.length === totalCheckboxes) {
+            selectAllCheckbox.checked = true;
+            selectAllCheckbox.indeterminate = false;
+        } else {
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = true;
+        }
+    }
+}
+
+async function bulkRetrySelected() {
+    const selectedCheckboxes = document.querySelectorAll('.queue-item-checkbox-input:checked');
+
+    if (selectedCheckboxes.length === 0) {
+        showToast('Tidak ada item yang dipilih', 'warning');
+        return;
+    }
+
+    const confirmMessage = `Apakah Anda yakin ingin mencoba upload ulang ${selectedCheckboxes.length} item yang dipilih?`;
+    if (!confirm(confirmMessage)) {
+        return;
+    }
+
+    const bulkRetryBtn = document.getElementById('bulk-retry-btn');
+    if (bulkRetryBtn) {
+        bulkRetryBtn.disabled = true;
+        bulkRetryBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Retrying...';
+    }
+
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (const checkbox of selectedCheckboxes) {
+        const itemId = checkbox.value;
+
+        try {
+            const response = await fetch(`${API_BASE}/api/queue/${itemId}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    status: 'pending',
+                    retryCount: 0,
+                    errorMessage: null
+                })
+            });
+            const result = await response.json();
+
+            if (result.success) {
+                successCount++;
+            } else {
+                errorCount++;
+                console.error(`Failed to retry item ${itemId}:`, result.error);
+            }
+        } catch (error) {
+            errorCount++;
+            console.error(`Error retrying item ${itemId}:`, error);
+        }
+    }
+
+    if (bulkRetryBtn) {
+        bulkRetryBtn.disabled = false;
+        bulkRetryBtn.innerHTML = '<i class="fas fa-redo"></i> Retry Terpilih';
+    }
+
+    // Refresh queue display
+    await loadAppData();
+
+    if (successCount > 0) {
+        showToast(`${successCount} item berhasil diatur untuk retry`, 'success');
+    }
+    if (errorCount > 0) {
+        showToast(`${errorCount} item gagal diatur untuk retry`, 'warning');
+    }
+}
+
+async function bulkDeleteSelected() {
+    const selectedCheckboxes = document.querySelectorAll('.queue-item-checkbox-input:checked');
+
+    if (selectedCheckboxes.length === 0) {
+        showToast('Tidak ada item yang dipilih', 'warning');
+        return;
+    }
+
+    const confirmMessage = `Apakah Anda yakin ingin menghapus ${selectedCheckboxes.length} item yang dipilih?\n\nTindakan ini tidak dapat dibatalkan!`;
+    if (!confirm(confirmMessage)) {
+        return;
+    }
+
+    const bulkDeleteBtn = document.getElementById('bulk-delete-btn');
+    if (bulkDeleteBtn) {
+        bulkDeleteBtn.disabled = true;
+        bulkDeleteBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting...';
+    }
+
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (const checkbox of selectedCheckboxes) {
+        const itemId = checkbox.value;
+
+        try {
+            const response = await fetch(`${API_BASE}/api/queue/${itemId}`, {
+                method: 'DELETE'
+            });
+            const result = await response.json();
+
+            if (result.success) {
+                successCount++;
+            } else {
+                errorCount++;
+                console.error(`Failed to delete item ${itemId}:`, result.error);
+            }
+        } catch (error) {
+            errorCount++;
+            console.error(`Error deleting item ${itemId}:`, error);
+        }
+    }
+
+    if (bulkDeleteBtn) {
+        bulkDeleteBtn.disabled = false;
+        bulkDeleteBtn.innerHTML = '<i class="fas fa-trash"></i> Hapus Terpilih';
+    }
+
+    // Refresh queue display
+    await loadAppData();
+
+    if (successCount > 0) {
+        showToast(`${successCount} item berhasil dihapus`, 'success');
+    }
+    if (errorCount > 0) {
+        showToast(`${errorCount} item gagal dihapus`, 'warning');
+    }
+}
+
+async function bulkDeleteAll() {
+    const allItems = appState.uploadQueue;
+
+    if (allItems.length === 0) {
+        showToast('Tidak ada item dalam antrian', 'warning');
+        return;
+    }
+
+    const confirmMessage = `Apakah Anda yakin ingin menghapus SEMUA ${allItems.length} item dalam antrian?\n\nTindakan ini tidak dapat dibatalkan!`;
+    if (!confirm(confirmMessage)) {
+        return;
+    }
+
+    const bulkDeleteAllBtn = document.getElementById('bulk-delete-all-btn');
+    if (bulkDeleteAllBtn) {
+        bulkDeleteAllBtn.disabled = true;
+        bulkDeleteAllBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting All...';
+    }
+
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (const item of allItems) {
+        try {
+            const response = await fetch(`${API_BASE}/api/queue/${item.id}`, {
+                method: 'DELETE'
+            });
+            const result = await response.json();
+
+            if (result.success) {
+                successCount++;
+            } else {
+                errorCount++;
+                console.error(`Failed to delete item ${item.id}:`, result.error);
+            }
+        } catch (error) {
+            errorCount++;
+            console.error(`Error deleting item ${item.id}:`, error);
+        }
+    }
+
+    if (bulkDeleteAllBtn) {
+        bulkDeleteAllBtn.disabled = false;
+        bulkDeleteAllBtn.innerHTML = '<i class="fas fa-trash-alt"></i> Hapus Semua';
+    }
+
+    // Refresh queue display
+    await loadAppData();
+
+    if (successCount > 0) {
+        showToast(`${successCount} item berhasil dihapus dari antrian`, 'success');
+    }
+    if (errorCount > 0) {
+        showToast(`${errorCount} item gagal dihapus`, 'warning');
     }
 }
 
