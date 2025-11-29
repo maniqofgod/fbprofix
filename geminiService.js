@@ -119,13 +119,7 @@ const rateLimiter = new GeminiRateLimiter();
 const apiRateLimiter = new GeminiApiRateLimiter();
 
 class GeminiService {
-  static detectLanguage(fileName) {
-    if (/[\u4e00-\u9fff]/.test(fileName)) {
-      return 'mandarin';
-    }
-    return 'indonesia';
-  }
-    async generateContent(fileName, userId = null, options = {}) {
+    async generateContent(fileName, userId = null) { // Removed options parameter
         const startTime = Date.now();
         let apiData = null;
         let success = false;
@@ -133,6 +127,10 @@ class GeminiService {
         let usedApiKeys = new Set(); // Track used API keys to avoid infinite loops
 
         try {
+            // Retrieve content settings
+            const settings = await geminiStore.getGeminiContentSettings();
+            const { contentLanguage, contentModel, customContentPrompt } = settings;
+
             // Rate limiting check
             if (userId && !rateLimiter.canMakeRequest(userId)) {
                 const remainingTime = rateLimiter.getRemainingTime(userId);
@@ -147,31 +145,10 @@ class GeminiService {
                 throw new Error(errorMessage);
             }
 
-            // Check if a specific API key is requested
-            let apisToTry = allApis;
-            if (options.apiKeyId) {
-                const specificApi = allApis.find(api => api.id == options.apiKeyId);
-                if (specificApi) {
-                    apisToTry = [specificApi]; // Only try the specific API key
-                    console.log(`🎯 Using specific API key: ${specificApi.name} (${specificApi.id})`);
-                } else {
-                    errorMessage = `API key dengan ID ${options.apiKeyId} tidak ditemukan.`;
-                    throw new Error(errorMessage);
-                }
-            }
-
             // Try each API key until one works
             let lastError;
-            for (const currentApi of apisToTry) {
+            for (const currentApi of allApis) {
                 if (usedApiKeys.has(currentApi.id)) continue; // Skip already tried keys
-
-                // Check if this API key is currently rate limited
-                if (apiRateLimiter.isRateLimited(currentApi.id)) {
-                    const remainingCooldown = apiRateLimiter.getRemainingCooldown(currentApi.id);
-                    console.log(`⏰ Skipping rate-limited API key: ${currentApi.name} (${currentApi.id}) - ${remainingCooldown}s remaining`);
-                    usedApiKeys.add(currentApi.id);
-                    continue;
-                }
 
                 try {
                     console.log(`🔄 Trying API key: ${currentApi.name} (${currentApi.id})`);
@@ -179,8 +156,8 @@ class GeminiService {
 
                     const genAI = new GoogleGenerativeAI(apiData.apiKey);
 
-                    // Get model configuration
-                    const modelName = options.model || 'models/gemini-2.0-flash-exp';
+                    // Get model configuration from settings
+                    const modelName = contentModel;
                     const availableModels = {
                         'models/gemini-2.0-flash-exp': { name: 'Gemini 2.0 Flash Experimental', description: 'Model terbaru dan paling canggih untuk berbagai tugas', maxTokens: 32768 },
                         'models/gemini-2.0-flash': { name: 'Gemini 2.0 Flash', description: 'Model stabil dan cepat untuk berbagai tugas', maxTokens: 32768 },
@@ -191,108 +168,27 @@ class GeminiService {
                     };
                     const modelInfo = availableModels[modelName] || availableModels['models/gemini-2.0-flash-exp'];
 
-                    // Handle legacy model names for backward compatibility
-                    let actualModelName = modelName;
-                    if (modelName === 'gemini-flash-latest') actualModelName = 'models/gemini-flash-latest';
-                    if (modelName === 'gemini-pro') actualModelName = 'models/gemini-pro';
-                    if (modelName === 'gemini-1.5-flash') actualModelName = 'models/gemini-1.5-flash';
-                    if (modelName === 'gemini-1.5-pro') actualModelName = 'models/gemini-1.5-pro';
-                    if (modelName === 'models/gemini-2.0-flash-exp') actualModelName = 'models/gemini-2.0-flash-exp';
+                    // Get language and prompt template from settings
+                    const language = contentLanguage;
+                    let prompt;
+                    if (customContentPrompt) {
+                        prompt = customContentPrompt.replace('${fileName}', fileName);
+                    } else {
+                        // Default fallback prompt if no custom prompt set
+                        const defaultPrompt = `Berdasarkan nama file video: "${fileName}", buat konten YouTube Shorts yang menarik dalam bahasa ${language}.
 
-                    // Get language and prompt template
-                    const language = options.language || GeminiService.detectLanguage(fileName);
-                    const promptTemplates = {
-                        indonesia: `Berdasarkan nama file video: "${fileName}", buat konten YouTube Shorts yang menarik.
-
-INSTRUKSI: Jawab HANYA dengan format JSON yang valid, tanpa teks tambahan atau penjelasan. Pastikan JSON dapat di-parse langsung.
-
-Format JSON:
+Format JSON yang harus dikembalikan:
 {
-   "title": "judul yang catchy dan menarik (max 100 karakter)",
-   "description": "deskripsi menarik yang menggambarkan konten video (max 500 karakter)",
-   "hashtags": "beberapa hashtag relevan dipisah dengan koma"
+   "title": "judul catchy max 100 karakter",
+   "description": "deskripsi menarik max 500 karakter",
+   "hashtags": "hashtags dipisah koma"
 }
 
-Contoh output yang benar:
-{"title":"Tutorial Make Up Natural","description":"Panduan lengkap make up natural untuk pemula","hashtags":"makeup,tutorial,beauty,natural"}
+Jawab HANYA dengan JSON, tanpa teks lain.`;
+                        prompt = defaultPrompt;
+                    }
 
-Pastikan:
-- Judul catchy dan mengundang klik
-- Deskripsi informatif tapi singkat
-- Hashtag maksimal 10, relevan dengan konten
-- Gunakan bahasa Indonesia yang natural dan komunikatif
-- Sesuaikan dengan konten dari nama file
-- Output HANYA JSON, tidak ada teks lain`,
-
-                        english: `Based on the video file name: "${fileName}", create engaging YouTube Shorts content.
-
-INSTRUCTIONS: Respond ONLY with valid JSON format, no additional text or explanations. Ensure the JSON can be parsed directly.
-
-JSON Format:
-{
-   "title": "catchy and attractive title (max 100 characters)",
-   "description": "interesting description that describes the video content (max 500 characters)",
-   "hashtags": "some relevant hashtags separated by commas"
-}
-
-Correct output example:
-{"title":"Natural Makeup Tutorial","description":"Complete guide to natural makeup for beginners","hashtags":"makeup,tutorial,beauty,natural"}
-
-Make sure:
-- Title is catchy and click-worthy
-- Description is informative but concise
-- Maximum 10 relevant hashtags
-- Use natural English language
-- Adapt to the content from the file name
-- Output ONLY JSON, no other text`,
-
-                        sunda: `Dumasar nami file video: "${fileName}", jieun konten YouTube Shorts anu narik.
-
-INTRUKSI: Jawab HANYA jeung format JSON anu valid, tanpa téks tambahan atanapi penjelasan. Pastikeun JSON tiasa di-parse langsung.
-
-Format JSON:
-{
-   "title": "judul anu catchy jeung narik (max 100 karakter)",
-   "description": "deskripsi narik anu ngagambarkeun eusi video (max 500 karakter)",
-   "hashtags": "sababaraha hashtag relevan dipisah koma"
-}
-
-Conto output anu bener:
-{"title":"Tutorial Make Up Natural","description":"Panduan lengkap make up natural keur pamula","hashtags":"makeup,tutorial,beauty,natural"}
-
-Pastikeun:
-- Judul catchy jeung ngundang klik
-- Deskripsi informatif tapi singket
-- Hashtag maksimal 10, relevan jeung konten
-- Paké basa Sunda anu natural
-- Sesuaikeun jeung konten tina nami file
-- Output HANYA JSON, euweuh téks séjén`,
-
-                       mandarin: `基于视频文件名："${fileName}"，创建引人注目的YouTube Shorts内容。
-
-INSTRUCTIONS: 只用有效的JSON格式回答，不要额外的文本或解释。确保JSON可以直接解析。
-
-JSON格式：
-{
-   "title": "引人注目的标题（最多100字符）",
-   "description": "有趣的描述，描述视频内容（最多500字符）",
-   "hashtags": "一些相关标签，用逗号分隔"
-}
-
-正确输出示例：
-{"title":"自然化妆教程","description":"适合初学者的完整自然化妆指南","hashtags":"化妆,教程,美妆,自然"}
-
-确保：
-- 标题引人注目且点击诱人
-- 描述信息丰富但简洁
-- 最多10个相关标签
-- 使用自然的中文语言
-- 根据文件名内容调整
-- 输出仅JSON，无其他文本`
-                    };
-                    const prompt = promptTemplates[language] || promptTemplates.indonesia;
-
-                    const model = genAI.getGenerativeModel({ model: actualModelName });
+                    const model = genAI.getGenerativeModel({ model: modelName }); // Use modelName from settings
 
                     // Retry logic dengan exponential backoff
                     let apiError;
@@ -373,19 +269,6 @@ JSON格式：
                             console.warn(`Gemini API attempt ${attempt} failed:`, error.message);
                             console.warn('Full error:', error);
 
-                            // Check if this is a rate limit error
-                            const isRateLimitError = error.message?.toLowerCase().includes('rate limit') ||
-                                                    error.message?.toLowerCase().includes('quota exceeded') ||
-                                                    error.message?.toLowerCase().includes('resource exhausted') ||
-                                                    error.status === 429;
-
-                            if (isRateLimitError) {
-                                console.log(`🚫 Rate limit detected for API key ${currentApi.name} (${currentApi.id})`);
-                                apiRateLimiter.markRateLimited(currentApi.id, error.message || 'Rate limit exceeded');
-                                // Break out of retry loop for this API key
-                                break;
-                            }
-
                             if (attempt < 3) {
                                 const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000); // Exponential backoff max 5s
                                 await new Promise(resolve => setTimeout(resolve, delay));
@@ -435,19 +318,196 @@ JSON格式：
         }
     }
 
+    async generateComment(videoTitle, userId = null) { // Removed maxRetries, customPrompt, language from parameters
+        const startTime = Date.now();
+        let success = false;
+        let errorMessage = null;
+        let totalAttempts = 0;
+
+        try {
+            // Retrieve comment settings
+            const settings = await geminiStore.getGeminiCommentSettings();
+            const { maxRetries, commentLanguage, commentModel, maxApiUsesPerVideo } = settings;
+
+            // Extract video ID for usage tracking (simple extraction from YouTube URL if present)
+            let videoId = videoTitle;
+            if (videoTitle.includes('youtube.com') || videoTitle.includes('youtu.be')) {
+                const urlMatch = videoTitle.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+                if (urlMatch) {
+                    videoId = urlMatch[1];
+                }
+            }
+
+            // Check if we've exceeded the usage limit for this video
+            const usageLimitExceeded = await geminiStore.isVideoUsageLimitExceeded(videoId, maxApiUsesPerVideo);
+            if (usageLimitExceeded) {
+                console.log(`⏰ Usage limit exceeded for video ${videoId} (${maxApiUsesPerVideo} uses per API). Implementing 5-minute cooldown.`);
+                await new Promise(resolve => setTimeout(resolve, 5 * 60 * 1000)); // 5 minutes
+                console.log(`✅ Cooldown completed for video ${videoId}`);
+            }
+
+            // Rate limiting check
+            if (userId && !rateLimiter.canMakeRequest(userId)) {
+                const remainingTime = rateLimiter.getRemainingTime(userId);
+                errorMessage = `Rate limit exceeded. Coba lagi dalam ${remainingTime} detik.`;
+                throw new Error(errorMessage);
+            }
+
+            // Get available APIs that haven't reached the limit for this video
+            const availableApis = await geminiStore.getAvailableApisForVideo(videoId, maxApiUsesPerVideo);
+            if (availableApis.length === 0) {
+                errorMessage = `Tidak ada API Gemini yang tersedia untuk video ini. Semua API telah mencapai batas penggunaan (${maxApiUsesPerVideo} kali per API per video).`;
+                throw new Error(errorMessage);
+            }
+
+            console.log(`🎯 Starting comment generation for: "${videoTitle}" (Video ID: ${videoId})`);
+            console.log(`📊 Available APIs: ${availableApis.length}, Max retries: ${maxRetries}, Max uses per API: ${maxApiUsesPerVideo}`);
+
+            // Determine language and get comment settings for templates
+            const useLanguage = commentLanguage;
+            const commentSettings = await geminiStore.getGeminiCommentSettings();
+            const commentPrompts = commentSettings.commentPrompts || {};
+
+            let prompt;
+            if (commentPrompts[useLanguage] && commentPrompts[useLanguage].filter(p => p).length > 0) {
+                // Pick random non-null template
+                const availablePrompts = commentPrompts[useLanguage].filter(p => p);
+                const selectedPrompt = availablePrompts[Math.floor(Math.random() * availablePrompts.length)];
+                prompt = selectedPrompt.replace('${videoTitle}', videoTitle);
+                console.log(`✅ Using language: ${useLanguage}, selected prompt: ${selectedPrompt.substring(0, 60)}...`);
+            } else {
+                // No templates available - skip commenting
+                console.log(`⚠️ No comment templates configured for language: ${useLanguage}`);
+                return null;
+            }
+            console.log(`🤖 Using model: ${commentModel}`);
+
+            // Try up to maxRetries times with available API selection
+            for (let retry = 1; retry <= maxRetries; retry++) {
+                console.log(`🔄 Comment generation attempt ${retry}/${maxRetries}`);
+
+                // Shuffle available APIs for random selection
+                const shuffledApis = [...availableApis].sort(() => Math.random() - 0.5);
+
+                for (const currentApi of shuffledApis) {
+                    totalAttempts++;
+                    console.log(`🎲 Trying API: ${currentApi.name} (attempt ${totalAttempts})`);
+
+                    try {
+                        const genAI = new GoogleGenerativeAI(currentApi.apiKey);
+                        const model = genAI.getGenerativeModel({ model: commentModel }); // Use model from settings
+
+                        // Single attempt per API (no internal retries to speed up process)
+                        const result = await model.generateContent(prompt);
+                        const response = await result.response;
+                        const text = response.text().trim();
+
+                        console.log('✅ Raw Gemini comment response:', text);
+
+                        // Validate response
+                        if (!text || text.length > 200 || text.length < 2) {
+                            console.warn(`⚠️ Invalid response length: ${text.length} characters`);
+                            continue; // Try next API
+                        }
+
+                        // Increment usage count for this API and video
+                        await geminiStore.incrementApiVideoUsage(currentApi.id, videoId);
+                        console.log(`📊 Incremented usage count for API ${currentApi.name} on video ${videoId}`);
+
+                        success = true;
+                        const responseTime = Date.now() - startTime;
+
+                        // Log successful usage
+                        if (userId) {
+                            await geminiStore.logApiUsage(currentApi.id, userId, videoTitle, success, null, responseTime);
+                        }
+
+                        console.log(`🎉 Comment generated successfully with API: ${currentApi.name}`);
+                        console.log(`💬 Generated comment: "${text}"`);
+
+                        return text;
+
+                    } catch (error) {
+                        console.warn(`❌ API ${currentApi.name} failed:`, error.message);
+
+                        // Log failed attempt
+                        if (userId) {
+                            const responseTime = Date.now() - startTime;
+                            await geminiStore.logApiUsage(currentApi.id, userId, videoTitle, false, error.message, responseTime);
+                        }
+
+                        // Continue to next API
+                        continue;
+                    }
+                }
+
+                // If we've tried all available APIs in this retry round, wait a bit before next round
+                if (retry < maxRetries) {
+                    const waitTime = Math.min(1000 * retry, 3000); // Progressive wait: 1s, 2s, 3s
+                    console.log(`⏳ All available APIs tried in round ${retry}, waiting ${waitTime}ms before next round...`);
+                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                }
+            }
+
+            // If we get here, all attempts failed
+            errorMessage = `Failed to generate comment after ${totalAttempts} attempts with ${availableApis.length} available APIs`;
+            console.error(`💥 ${errorMessage}`);
+            throw new Error(errorMessage);
+
+        } catch (error) {
+            console.error('🚨 Error generating comment with Gemini:', error);
+            errorMessage = error.message;
+
+            // Log final error
+            if (userId) {
+                console.log(`[GEMINI_COMMENT_ERROR] User ${userId}: ${error.message} (after ${totalAttempts} attempts)`);
+            }
+
+            // Return null to indicate failure (no fallback comment)
+            return null;
+        }
+    }
+
     async validateApiKey(apiKey) {
         try {
+            // Basic format validation first
+            if (!apiKey || typeof apiKey !== 'string' || apiKey.length < 20) {
+                console.log('API key format invalid - too short or not a string');
+                return false;
+            }
+
+            // Try to make a minimal API call to test validity
             const genAI = new GoogleGenerativeAI(apiKey);
             const model = genAI.getGenerativeModel({ model: 'models/gemini-2.0-flash-exp' });
 
-            // Simple validation prompt to avoid rate limits
-            const result = await model.generateContent('Respond with exactly: VALID');
+            // Use the cheapest possible prompt to test connectivity
+            const result = await model.generateContent('OK');
             const response = await result.response;
             const text = response.text();
 
-            return text.toLowerCase().includes('valid');
+            // If we get any response, the API key works
+            if (text && text.trim().length > 0) {
+                console.log('API key validation successful');
+                return true;
+            }
+
+            return false;
         } catch (error) {
             console.error('Error validating Gemini API key:', error);
+
+            // If it's a quota/rate limit/429 error, treat as valid
+            // This allows API keys to be added even when temporarily quota-limited
+            const isQuotaError = error.message?.toLowerCase().includes('quota') ||
+                               error.message?.toLowerCase().includes('rate limit') ||
+                               error.message?.toLowerCase().includes('resource exhausted') ||
+                               error.status === 429;
+
+            if (isQuotaError) {
+                console.log('Quota error detected - allowing API key save despite temporary quota limit');
+                return true; // Allow it through - the key is valid, just quota-limited
+            }
+
+            // For other errors (invalid key format, auth errors, etc.), reject
             return false;
         }
     }

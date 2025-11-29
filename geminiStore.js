@@ -1,6 +1,17 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 
+// Database path constant for backwards compatibility
+const DB_PATH = path.join(__dirname, 'reelsync.db');
+
+// Helper function to ensure database connection
+function ensureDatabase() {
+    return new Promise((resolve, reject) => {
+        // For now, just resolve since GeminiStore handles its own database
+        resolve();
+    });
+}
+
 class GeminiPromptManager {
     static getPromptTemplates() {
         return {
@@ -142,6 +153,28 @@ class GeminiStore {
                         FOREIGN KEY (api_id) REFERENCES gemini_apis(id),
                         FOREIGN KEY (user_id) REFERENCES users(id)
                     );
+
+                    CREATE TABLE IF NOT EXISTS gemini_settings (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        key TEXT UNIQUE NOT NULL,
+                        value TEXT,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    );
+
+                    CREATE TABLE IF NOT EXISTS api_video_usage (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        api_id INTEGER NOT NULL,
+                        video_id TEXT NOT NULL,
+                        usage_count INTEGER DEFAULT 0,
+                        last_used DATETIME,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (api_id) REFERENCES gemini_apis(id),
+                        UNIQUE(api_id, video_id)
+                    );
+
+                    INSERT OR IGNORE INTO gemini_settings (key, value) VALUES ('geminiCommentSettings', '{"maxRetries":5,"commentLanguage":"indonesia","commentModel":"models/gemini-2.0-flash","maxApiUsesPerVideo":2,"customCommentPrompt":null}');
+                    INSERT OR IGNORE INTO gemini_settings (key, value) VALUES ('geminiContentSettings', '{"contentLanguage":"indonesia","contentModel":"models/gemini-2.0-flash","customContentPrompt":null}');
                 `;
 
                 this.db.exec(createTables, (err) => {
@@ -323,88 +356,380 @@ class GeminiStore {
     }
 
     async logApiUsage(apiId, userId, fileName, success, errorMessage = null, responseTime = null) {
-        return new Promise((resolve, reject) => {
-            const query = 'INSERT INTO gemini_usage (api_id, user_id, file_name, success, error_message, response_time) VALUES (?, ?, ?, ?, ?, ?)';
-            this.db.run(query, [apiId, userId, fileName, success ? 1 : 0, errorMessage, responseTime], function(err) {
-                if (err) {
-                    console.error('Error logging Gemini API usage:', err);
-                    // Don't reject here as logging failure shouldn't break the main flow
-                    resolve();
-                    return;
-                }
-                resolve();
-            });
-        });
-    }
+        try {
+            await ensureDatabase();
+            return new Promise((resolve, reject) => {
+                const db = new sqlite3.Database(DB_PATH);
+                // Check if we need to remove old records to keep under 1000
+                db.get('SELECT COUNT(*) as count FROM gemini_usage', [], (err, row) => {
+                    if (err) {
+                        db.close();
+                        reject(err);
+                        return;
+                    }
 
-    async getUsageStats(userId) {
-        return new Promise((resolve, reject) => {
-            const now = new Date();
-            const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+                    if (row.count >= 1000) {
+                        // Remove oldest records leaving 900
+                        db.run('DELETE FROM gemini_usage WHERE id IN (SELECT id FROM gemini_usage ORDER BY timestamp DESC LIMIT -1 OFFSET 900)', [], (err) => {
+                            if (err) {
+                                console.error('Error cleaning up old usage logs:', err);
+                            }
+                        });
+                    }
 
-            const query = `
-                SELECT
-                    COUNT(*) as total_requests,
-                    SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful_requests,
-                    SUM(CASE WHEN timestamp > ? THEN 1 ELSE 0 END) as recent_requests,
-                    SUM(CASE WHEN success = 1 AND timestamp > ? THEN 1 ELSE 0 END) as recent_successful_requests,
-                    AVG(CASE WHEN response_time IS NOT NULL THEN response_time ELSE NULL END) as avg_response_time
-                FROM gemini_usage
-                WHERE user_id = ?
-            `;
-
-            this.db.get(query, [yesterday.toISOString(), yesterday.toISOString(), userId], (err, row) => {
-                if (err) {
-                    console.error('Error getting usage stats:', err);
-                    resolve(null);
-                    return;
-                }
-
-                const totalRequests = row.total_requests || 0;
-                const successfulRequests = row.successful_requests || 0;
-                const failedRequests = totalRequests - successfulRequests;
-                const successRate = totalRequests > 0 ? ((successfulRequests / totalRequests) * 100).toFixed(2) : 0;
-
-                const recentRequests = row.recent_requests || 0;
-                const recentSuccessfulRequests = row.recent_successful_requests || 0;
-                const recentSuccessRate = recentRequests > 0 ? ((recentSuccessfulRequests / recentRequests) * 100).toFixed(2) : 0;
-
-                resolve({
-                    totalRequests,
-                    successfulRequests,
-                    failedRequests,
-                    successRate: `${successRate}%`,
-                    recentRequests,
-                    recentSuccessRate: `${recentSuccessRate}%`,
-                    averageResponseTime: row.avg_response_time ? Math.round(row.avg_response_time) : 0
+                    // Insert new log
+                    db.run('INSERT INTO gemini_usage (id, api_id, user_id, file_name, success, error_message, response_time, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                           [Date.now(), apiId, userId, fileName, success ? 1 : 0, errorMessage, responseTime, new Date().toISOString()], function(err) {
+                        db.close();
+                        if (err) {
+                            console.error('Error logging API usage:', err);
+                            reject(err);
+                        } else {
+                            resolve();
+                        }
+                    });
                 });
             });
-        });
-    }
-
-    async updateApiUsageCount(apiId) {
-        return new Promise((resolve, reject) => {
-            const query = 'UPDATE gemini_apis SET usage_count = usage_count + 1, last_used = CURRENT_TIMESTAMP WHERE id = ?';
-            this.db.run(query, [apiId], function(err) {
-                if (err) {
-                    console.error('Error updating API usage count:', err);
-                    resolve();
-                    return;
-                }
-                resolve();
-            });
-        });
-    }
-
-    close() {
-        if (this.db) {
-            this.db.close();
+        } catch (error) {
+            console.error('Error logging Gemini API usage:', error);
         }
+    }
+
+    async getGeminiCommentSettings() {
+        try {
+            return new Promise((resolve, reject) => {
+                this.db.get('SELECT value FROM gemini_settings WHERE key = ?', ['geminiCommentSettings'], (err, row) => {
+                    if (err) {
+                        console.error('Error reading Gemini comment settings:', err);
+                        reject(err);
+                    } else if (row && row.value) {
+                        const settings = JSON.parse(row.value);
+                        // Ensure commentPrompts exist with default templates if not present for ALL languages
+                        if (!settings.commentPrompts) {
+                            settings.commentPrompts = {};
+                        }
+
+                        const defaultPrompts = this.getDefaultCommentPrompts();
+                        const languages = ['indonesia', 'english', 'sunda', 'mandarin'];
+
+                        // Merge existing templates with defaults for missing languages
+                        languages.forEach(lang => {
+                            if (!settings.commentPrompts[lang] || !Array.isArray(settings.commentPrompts[lang]) || settings.commentPrompts[lang].filter(p => p).length === 0) {
+                                console.log(`📝 Adding default templates for missing language: ${lang}`);
+                                settings.commentPrompts[lang] = defaultPrompts[lang];
+                            }
+                        });
+
+                        // If we added any defaults, save them back to database (but don't fail if this fails)
+                        if (Object.keys(settings.commentPrompts).length > 0) {
+                            this.setGeminiCommentSettings(settings).catch(console.warn);
+                        }
+
+                        resolve(settings);
+                    } else {
+                        // Should not happen since we insert defaults, but fallback with default prompts
+                        const defaultSettings = {
+                            maxRetries: 5,
+                            commentLanguage: 'indonesia',
+                            commentModel: 'models/gemini-2.0-flash',
+                            maxRetries: 5,
+                            maxApiUsesPerVideo: 2,
+                            customCommentPrompt: null,
+                            commentPrompts: this.getDefaultCommentPrompts()
+                        };
+                        resolve(defaultSettings);
+                    }
+                });
+            });
+        } catch (error) {
+            console.error('Error reading Gemini comment settings:', error);
+            return {
+                maxRetries: 5,
+                commentLanguage: 'indonesia',
+                commentModel: 'models/gemini-2.0-flash',
+                maxRetries: 5,
+                maxApiUsesPerVideo: 2,
+                customCommentPrompt: null,
+                commentPrompts: this.getDefaultCommentPrompts()
+            };
+        }
+    }
+
+    async setGeminiCommentSettings(settings) {
+        try {
+            return new Promise((resolve, reject) => {
+                this.db.run('UPDATE gemini_settings SET value = ? WHERE key = ?',
+                           [JSON.stringify(settings), 'geminiCommentSettings'], function(err) {
+                    if (err) {
+                        console.error('Error setting Gemini comment settings:', err);
+                        reject(err);
+                    } else {
+                        resolve(settings);
+                    }
+                });
+            });
+        } catch (error) {
+            console.error('Error setting Gemini comment settings:', error);
+            throw error;
+        }
+    }
+
+    async getGeminiContentSettings() {
+        try {
+            await ensureDatabase();
+            return new Promise((resolve, reject) => {
+                const db = new sqlite3.Database(DB_PATH);
+                db.get('SELECT value FROM gemini_settings WHERE key = ?', ['geminiContentSettings'], (err, row) => {
+                    db.close();
+                    if (err) {
+                        console.error('Error reading Gemini content settings:', err);
+                        reject(err);
+                    } else if (row && row.value) {
+                        resolve(JSON.parse(row.value));
+                    } else {
+                        // Should not happen since we insert defaults, but fallback
+                        resolve({
+                            contentLanguage: 'indonesia',
+                            contentModel: 'models/gemini-2.0-flash',
+                            customContentPrompt: null
+                        });
+                    }
+                });
+            });
+        } catch (error) {
+            console.error('Error reading Gemini content settings:', error);
+            return {
+                contentLanguage: 'indonesia',
+                contentModel: 'models/gemini-2.0-flash',
+                customContentPrompt: null
+            };
+        }
+    }
+
+    async setGeminiContentSettings(settings) {
+        try {
+            await ensureDatabase();
+            return new Promise((resolve, reject) => {
+                const db = new sqlite3.Database(DB_PATH);
+                db.run('UPDATE gemini_settings SET value = ? WHERE key = ?',
+                       [JSON.stringify(settings), 'geminiContentSettings'], function(err) {
+                    db.close();
+                    if (err) {
+                        console.error('Error setting Gemini content settings:', err);
+                        reject(err);
+                    } else {
+                        resolve(settings);
+                    }
+                });
+            });
+        } catch (error) {
+            console.error('Error setting Gemini content settings:', error);
+            throw error;
+        }
+    }
+
+    async getUsageStats() {
+        try {
+            await ensureDatabase();
+            return new Promise((resolve, reject) => {
+                const db = new sqlite3.Database(DB_PATH);
+                // Get overall stats
+                db.all(`
+                    SELECT
+                        COUNT(*) as total_requests,
+                        SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful_requests,
+                        AVG(response_time) as avg_response_time
+                    FROM gemini_usage
+                `, [], (err, overallStats) => {
+                    if (err) {
+                        db.close();
+                        console.error('Error getting overall usage stats:', err);
+                        reject(err);
+                        return;
+                    }
+
+                    // Get last 24h stats
+                    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+                    db.all(`
+                        SELECT
+                            COUNT(*) as recent_requests,
+                            SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as recent_successful
+                        FROM gemini_usage
+                        WHERE timestamp >= ?
+                    `, [yesterday], (err, recentStats) => {
+                        db.close();
+                        if (err) {
+                            console.error('Error getting recent usage stats:', err);
+                            reject(err);
+                            return;
+                        }
+
+                        const total = overallStats[0].total_requests || 0;
+                        const successful = overallStats[0].successful_requests || 0;
+                        const failed = total - successful;
+                        const successRate = total > 0 ? ((successful / total) * 100).toFixed(2) : '0.00';
+
+                        const recentTotal = recentStats[0].recent_requests || 0;
+                        const recentSuccessful = recentStats[0].recent_successful || 0;
+                        const recentSuccessRate = recentTotal > 0 ? ((recentSuccessful / recentTotal) * 100).toFixed(2) : '0.00';
+                        const avgResponseTime = overallStats[0].avg_response_time ?
+                            Math.round(overallStats[0].avg_response_time) : 0;
+
+                        resolve({
+                            totalRequests: total,
+                            successfulRequests: successful,
+                            failedRequests: failed,
+                            successRate: `${successRate}%`,
+                            recentRequests: recentTotal,
+                            recentSuccessRate: `${recentSuccessRate}%`,
+                            averageResponseTime: avgResponseTime
+                        });
+                    });
+                });
+            });
+        } catch (error) {
+            console.error('Error getting usage stats:', error);
+            return null;
+        }
+    }
+
+    // API Video Usage tracking methods
+    async getApiVideoUsage(apiId, videoId) {
+        try {
+            await ensureDatabase();
+            return new Promise((resolve, reject) => {
+                const db = new sqlite3.Database(DB_PATH);
+                db.get('SELECT * FROM api_video_usage WHERE api_id = ? AND video_id = ?', [apiId, videoId], (err, row) => {
+                    db.close();
+                    if (err) {
+                        console.error('Error reading API video usage:', err);
+                        reject(err);
+                    } else {
+                        resolve(row || { api_id: apiId, video_id: videoId, usage_count: 0, last_used: null });
+                    }
+                });
+            });
+        } catch (error) {
+            console.error('Error getting API video usage:', error);
+            return { api_id: apiId, video_id: videoId, usage_count: 0, last_used: null };
+        }
+    }
+
+    async incrementApiVideoUsage(apiId, videoId) {
+        try {
+            await ensureDatabase();
+            return new Promise((resolve, reject) => {
+                const db = new sqlite3.Database(DB_PATH);
+                const now = new Date().toISOString();
+                db.run(`INSERT OR REPLACE INTO api_video_usage (api_id, video_id, usage_count, last_used, updated_at)
+                       VALUES (?, ?,
+                              COALESCE((SELECT usage_count + 1 FROM api_video_usage WHERE api_id = ? AND video_id = ?), 1),
+                              ?, ?)`,
+                       [apiId, videoId, apiId, videoId, now, now], function(err) {
+                    db.close();
+                    if (err) {
+                        console.error('Error incrementing API video usage:', err);
+                        reject(err);
+                    } else {
+                        resolve(this.changes > 0);
+                    }
+                });
+            });
+        } catch (error) {
+            console.error('Error incrementing API video usage:', error);
+            throw error;
+        }
+    }
+
+    async getAvailableApisForVideo(videoId, maxUsesPerVideo) {
+        try {
+            await ensureDatabase();
+            const allApis = await this.getAllApis();
+            if (allApis.length === 0) return [];
+
+            return new Promise((resolve, reject) => {
+                const db = new sqlite3.Database(DB_PATH);
+                const apiIds = allApis.map(api => api.id);
+
+                // Get usage counts for all APIs for this video
+                const placeholders = apiIds.map(() => '?').join(',');
+                db.all(`SELECT api_id, usage_count FROM api_video_usage WHERE api_id IN (${placeholders}) AND video_id = ?`,
+                       [...apiIds, videoId], (err, rows) => {
+                    db.close();
+                    if (err) {
+                        console.error('Error getting API video usage for all APIs:', err);
+                        reject(err);
+                        return;
+                    }
+
+                    // Create a map of api_id to usage count
+                    const usageMap = {};
+                    rows.forEach(row => {
+                        usageMap[row.api_id] = row.usage_count || 0;
+                    });
+
+                    // Filter APIs that haven't reached the limit
+                    const availableApis = allApis.filter(api =>
+                        (usageMap[api.id] || 0) < maxUsesPerVideo
+                    );
+
+                    resolve(availableApis);
+                });
+            });
+        } catch (error) {
+            console.error('Error getting available APIs for video:', error);
+            return [];
+        }
+    }
+
+    async isVideoUsageLimitExceeded(videoId, maxUsesPerVideo) {
+        try {
+            const availableApis = await this.getAvailableApisForVideo(videoId, maxUsesPerVideo);
+            return availableApis.length === 0;
+        } catch (error) {
+            console.error('Error checking if video usage limit exceeded:', error);
+            return true; // Assume exceeded if error
+        }
+    }
+
+    getDefaultCommentPrompts() {
+        return {
+            indonesia: [
+                'Video YouTube dengan judul: "${videoTitle}". Buat komentar natural dalam BAHASA INDONESIA saja. Maksimal 150 karakter. HANYA berikan komentar tekstual, TIDAK ada penjelasan atau teks tambahan apapun.',
+                'Dengan tidak memperdulikan bahasa judul video, buat komentar dalam BAHASA INDONESIA untuk video: "${videoTitle}". Maks 150 karakter. Jawab HANYA dengan komentar Indonesia.',
+                'Komentar YouTube yang natural dan autentik dalam BAHASA INDONESIA untuk video berjudul: "${videoTitle}". Maksimal 150 karakter. Output HANYA komentar tekstual tanpa bahasa lain.',
+                'Video: "${videoTitle}". Mustahil bahasa komentar bukan BAHASA INDONESIA. Buat komentar maks 150 karakter dalam bahasa Indonesia saja. HANYA komentar, tidak ada yang lain.'
+            ],
+            english: [
+                'YouTube video titled: "${videoTitle}". Create a natural, authentic viewer comment EXCLUSIVELY in ENGLISH language only. Max 150 characters. Respond ONLY with the English comment text.',
+                'Regardless of the video title language, create a comment in ENGLISH ONLY for video: "${videoTitle}". Maximum 150 characters. Respond with ONLY the English comment.',
+                'Generate a natural English comment for YouTube video titled: "${videoTitle}". Absolutely NO languages other than ENGLISH. Max 150 characters. Output ONLY the English comment.',
+                'Video: "${videoTitle}". Comment MUST be in ENGLISH language exclusively. Create natural viewer comment in English, max 150 characters. Respond with ONLY the English comment text.'
+            ],
+            sunda: [
+                'Video YouTube judulna: "${videoTitle}". Jieun komentar alami dina BASA SUNDA wungkul. Maksimal 120 karakter. Wangsul ku komentar Sundana wungkul, teu aya basa séjén.',
+                'Teu paduli basa judul video, jieun komentar BASA SUNDA pikeun video: "${videoTitle}". Maks 120 karakter. Wangsul ku komentar Sundana wungkul.',
+                'Komentar YouTube anu natural dina BASE SUNDA pikeun video judul: "${videoTitle}". Maksimal 120 karakter. Hasilkeun ukur komentar basa Sunda, teu aya basa lian.',
+                'Video: "${videoTitle}". Komentar KUDU BASA SUNDA wungkul. Jieun komentar alami maks 120 karakter basa Sunda. Hasilkeun ukur komentar Sunda.'
+            ],
+            mandarin: [
+                'YouTube视频标题:"${videoTitle}"。创建一个自然的、真实的观众评论，完全只用中文书写。最大150字符。只回复评论中文文字。',
+                '无论视频标题语言如何，创作完全用中文的评论，针对视频:"${videoTitle}"。最大150字符。只回复中文评论。',
+                '为标题为:"${videoTitle}"的YouTube视频生成自然中文评论。绝对只用中文书写。最大150字符。只输出中文评论文字。',
+                '视频:"${videoTitle}"。评论必须完全只用中文书写。创建自然的中文字幕评论，最大150字符。只回复中文评论内容。'
+            ]
+        };
+    }
+
+    setDbPath(newPath) {
+        DB_PATH = newPath;
     }
 }
 
 // Export helper classes untuk digunakan di routes
-module.exports.GeminiPromptManager = GeminiPromptManager;
 module.exports.GeminiModelManager = GeminiModelManager;
+
+// Initialize migration on module load
+// migrateFromJson().catch(console.error);
 
 module.exports = new GeminiStore();

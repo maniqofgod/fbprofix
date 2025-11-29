@@ -71,4 +71,6 @@ release/
 
 # Database and uploads
 database.sqlite
+*.db
 uploads/
+debug-*.png

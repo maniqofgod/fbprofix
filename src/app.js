@@ -1,3 +1,76 @@
+// Dynamic API Base URL configuration - must be defined at the top
+function getApiBase() {
+    // Check if we're in a production environment (HTTPS)
+    if (window.location.protocol === 'https:') {
+        // For production domains like fbpro.1337.edu.pl, use the same origin
+        return window.location.origin;
+    } else {
+        // For localhost/development, use localhost:3000
+        return 'http://localhost:3000';
+    }
+}
+
+// Global API_BASE - must be available throughout the app
+const API_BASE = getApiBase();
+
+// Placeholder elements object for early function definitions
+let elements = {};
+
+// Make critical functions globally available immediately to prevent reference errors
+(function() {
+    // Helper function to safely show toast without elements dependency
+    const safeShowToast = (message, type = 'info') => {
+        if (elements && elements.logsContainer) {
+            // Add to logs if available
+            addLog({
+                level: type,
+                message: message,
+                timestamp: new Date().toISOString()
+            });
+        }
+        // Always use browser alert for critical messages
+        if (type === 'error') {
+            console.error(message);
+        } else {
+            console.log(message);
+        }
+    };
+
+    window.editGeminiApi = async function(apiId) {
+        if (!elements || !elements.geminiModal) {
+            safeShowToast('Interface belum siap. Silakan coba lagi.', 'warning');
+            return;
+        }
+
+        const api = appState.geminiApis?.find(a => a.id === parseInt(apiId));
+        if (api) {
+            openGeminiModal(api);
+        }
+    };
+
+    window.deleteGeminiApi = async function(apiId) {
+        if (confirm('Apakah Anda yakin ingin menghapus API key ini?')) {
+            try {
+                const response = await fetch(`${API_BASE}/api/gemini/apis/${apiId}`, {
+                    method: 'DELETE'
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    if (elements && elements.geminiApisList) {
+                        await updateGeminiDisplay();
+                    }
+                    safeShowToast('API key berhasil dihapus', 'success');
+                } else {
+                    safeShowToast(`Gagal menghapus API key: ${result.error || 'API key tidak ditemukan'}`, 'error');
+                }
+            } catch (error) {
+                safeShowToast(`Error: ${error.message}`, 'error');
+            }
+        }
+    };
+})();
+
 // Application State
 let appState = {
     accounts: [],
@@ -16,15 +89,6 @@ let appState = {
     isAuthenticated: false
 };
 
-// API Base URL
-const API_BASE = window.location.origin;
-
-// DOM Elements
-let elements = {};
-
-// Current user info
-let currentUser = null;
-
 // Analytics state
 let analyticsState = {
     currentTimeRange: '30d',
@@ -40,10 +104,74 @@ let adminState = {
     currentEditingUser: null
 };
 
+// Check if Chrome extension APIs are available (to prevent port disconnection errors)
+function checkChromeExtensionAPIs() {
+    try {
+        // Check if chrome.runtime is available but not connected
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+            // Try to detect if the port would be disconnected
+            const testPort = chrome.runtime.connect();
+            if (testPort && typeof testPort.disconnect === 'function') {
+                testPort.disconnect();
+                return true; // Chrome extension APIs are available
+            }
+        }
+    } catch (error) {
+        // Ignore errors - means Chrome extension APIs are not available
+        console.log('Chrome extension APIs not available or disconnected:', error.message);
+    }
+    return false; // Chrome extension APIs are not available
+}
+
 // Initialize application when DOM is loaded
 document.addEventListener('DOMContentLoaded', async () => {
     initializeElements();
     setupEventListeners();
+
+    // Check Chrome extension API availability
+    const hasChromeExtensionAPIs = checkChromeExtensionAPIs();
+
+    if (hasChromeExtensionAPIs && typeof chrome !== 'undefined' && chrome.runtime) {
+        console.log('Chrome extension detected - may cause API conflicts. Disabling potential extension interactions.');
+
+        // Override chrome.runtime methods to prevent port disconnection errors
+        const originalSendMessage = chrome.runtime.sendMessage;
+        const originalConnect = chrome.runtime.connect;
+
+        // Override sendMessage to catch and suppress port errors
+        chrome.runtime.sendMessage = function(...args) {
+            try {
+                return originalSendMessage.apply(this, args);
+            } catch (error) {
+                // Suppress port disconnection errors
+                if (error.message && error.message.includes('disconnected port')) {
+                    console.warn('Suppressed Chrome extension port disconnection error:', error.message);
+                    return; // Return undefined to prevent errors
+                }
+                throw error; // Re-throw other errors
+            }
+        };
+
+        // Override connect to catch early connection issues
+        chrome.runtime.connect = function(...args) {
+            try {
+                const port = originalConnect.apply(this, args);
+
+                // Add error handlers to prevent unhandled promise rejections
+                if (port && typeof port.onDisconnect === 'object') {
+                    port.onDisconnect.addListener(() => {
+                        // Silently handle disconnection
+                        console.warn('Chrome extension port disconnected - this is expected in web app context.');
+                    });
+                }
+
+                return port;
+            } catch (error) {
+                console.warn('Chrome extension connection error (expected in web app):', error.message);
+                return null; // Return null to prevent errors
+            }
+        };
+    }
 
     // Check authentication status first
     await checkAuthStatus();
@@ -2563,7 +2691,7 @@ function handleAccountValidation(result) {
 
 // Handle modal click outside
 elements.accountModal?.addEventListener('click', (e) => {
-    if (e.target === elements.accountModal) {
+    if (e.target === elements?.accountModal) {
         closeAccountModal();
     }
 });
@@ -2814,7 +2942,7 @@ window.deleteGeminiApi = async function(apiId) {
 
 // Handle modal click outside
 elements.geminiModal?.addEventListener('click', (e) => {
-    if (e.target === elements.geminiModal) {
+    if (e.target === elements?.geminiModal) {
         closeGeminiModal();
     }
 });
@@ -2957,7 +3085,7 @@ function updateBulkResultsDisplay(results) {
 
 // Handle modal click outside for bulk gemini modal
 elements.bulkGeminiModal?.addEventListener('click', (e) => {
-    if (e.target === elements.bulkGeminiModal) {
+    if (e.target === elements?.bulkGeminiModal) {
         closeBulkGeminiModal();
     }
 });
